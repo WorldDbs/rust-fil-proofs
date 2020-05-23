@@ -77,38 +77,20 @@ impl SystemMetadata {
         let cpu_physical = block_on(async { heim::cpu::physical_count().await })
             .map_err(|_| anyhow!("Failed to retrieve cpu physical count information"))?;
 
-        let (processor, base, max, features) = {
-            #[cfg(target_arch = "x86_64")]
-            {
-                let cpuid = raw_cpuid::CpuId::new();
-                let processor = cpuid
-                    .get_extended_function_info()
-                    .and_then(|info| info.processor_brand_string().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                let (base, max) = cpuid
-                    .get_processor_frequency_info()
-                    .map(|info| {
-                        (
-                            info.processor_base_frequency(),
-                            info.processor_max_frequency(),
-                        )
-                    })
-                    .unwrap_or_default();
+        let cpuid = raw_cpuid::CpuId::new();
+        let processor = cpuid
+            .get_extended_function_info()
+            .and_then(|info| info.processor_brand_string().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let (base, max) = cpuid
+            .get_processor_frequency_info()
+            .map(|info| {
                 (
-                    processor,
-                    base,
-                    max,
-                    cpuid
-                        .get_feature_info()
-                        .map(|info| format!("{:?}", info))
-                        .unwrap_or_default(),
+                    info.processor_base_frequency(),
+                    info.processor_max_frequency(),
                 )
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                ("unknown".into(), 0, 0, "unknown".into())
-            }
-        };
+            })
+            .unwrap_or_default();
 
         Ok(SystemMetadata {
             system: host.system().into(),
@@ -118,7 +100,10 @@ impl SystemMetadata {
             processor,
             processor_base_frequency_hz: base,
             processor_max_frequency_hz: max,
-            processor_features: features,
+            processor_features: cpuid
+                .get_feature_info()
+                .map(|info| format!("{:?}", info))
+                .unwrap_or_default(),
             processor_cores_logical: cpu_logical,
             processor_cores_physical: cpu_physical.unwrap_or_default(),
             memory_total_bytes: memory.total().get::<uom::si::information::byte>(),
@@ -132,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_metadata() {
-        let m = Metadata::wrap(()).expect("failed to create metadata");
+        let m = Metadata::wrap(()).unwrap();
         println!("{:#?}", m);
 
         assert!(m.system.memory_total_bytes > 0);
