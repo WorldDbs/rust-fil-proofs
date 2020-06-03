@@ -1,30 +1,26 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Result;
-use bellperson::{
-    bls::Bls12,
-    groth16::{self, prepare_verifying_key},
-};
+use bellperson::groth16;
 use lazy_static::lazy_static;
 use log::info;
-use rand::rngs::OsRng;
-use storage_proofs_core::{compound_proof::CompoundProof, merkle::MerkleTreeTrait};
-use storage_proofs_porep::stacked::{StackedCompound, StackedDrg};
-use storage_proofs_post::fallback::{FallbackPoSt, FallbackPoStCircuit, FallbackPoStCompound};
+use paired::bls12_381::Bls12;
+use storage_proofs::compound_proof::CompoundProof;
+use storage_proofs::porep::stacked::{StackedCompound, StackedDrg};
+use storage_proofs::post::fallback;
 
-use crate::{
-    constants::DefaultPieceHasher,
-    parameters::{public_params, window_post_public_params, winning_post_public_params},
-    types::{PaddedBytesAmount, PoRepConfig, PoRepProofPartitions, PoStConfig, PoStType},
-};
+use crate::constants::DefaultPieceHasher;
+use crate::parameters::{public_params, window_post_public_params, winning_post_public_params};
+use crate::types::*;
 
 type Bls12GrothParams = groth16::MappedParameters<Bls12>;
-pub type Bls12PreparedVerifyingKey = groth16::PreparedVerifyingKey<Bls12>;
+pub type Bls12VerifyingKey = groth16::VerifyingKey<Bls12>;
 
 type Cache<G> = HashMap<String, Arc<G>>;
 type GrothMemCache = Cache<Bls12GrothParams>;
-type VerifyingKeyMemCache = Cache<Bls12PreparedVerifyingKey>;
+type VerifyingKeyMemCache = Cache<Bls12VerifyingKey>;
 
 lazy_static! {
     static ref GROTH_PARAM_MEMORY_CACHE: Mutex<GrothMemCache> = Default::default();
@@ -42,7 +38,7 @@ where
 {
     info!("trying parameters memory cache for: {}", &identifier);
     {
-        let cache = (*cache_ref).lock().expect("poisoned cache");
+        let cache = (*cache_ref).lock().unwrap();
 
         if let Some(entry) = cache.get(&identifier) {
             info!("found params in memory cache for {}", &identifier);
@@ -55,7 +51,7 @@ where
     let new_entry = Arc::new(generator()?);
     let res = new_entry.clone();
     {
-        let cache = &mut (*cache_ref).lock().expect("poisoned cache");
+        let cache = &mut (*cache_ref).lock().unwrap();
         cache.insert(identifier, new_entry);
     }
 
@@ -71,12 +67,9 @@ where
 }
 
 #[inline]
-pub fn lookup_verifying_key<F>(
-    identifier: String,
-    generator: F,
-) -> Result<Arc<Bls12PreparedVerifyingKey>>
+pub fn lookup_verifying_key<F>(identifier: String, generator: F) -> Result<Arc<Bls12VerifyingKey>>
 where
-    F: FnOnce() -> Result<Bls12PreparedVerifyingKey>,
+    F: FnOnce() -> Result<Bls12VerifyingKey>,
 {
     let vk_identifier = format!("{}-verifying-key", &identifier);
     cache_lookup(&*VERIFYING_KEY_MEMORY_CACHE, vk_identifier, generator)
@@ -89,24 +82,23 @@ pub fn get_stacked_params<Tree: 'static + MerkleTreeTrait>(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
         porep_config.porep_id,
-        porep_config.api_version,
     )?;
 
     let parameters_generator = || {
         <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-            StackedDrg<'_, Tree, DefaultPieceHasher>,
+            StackedDrg<Tree, DefaultPieceHasher>,
             _,
-        >>::groth_params::<OsRng>(None, &public_params)
+        >>::groth_params::<rand::rngs::OsRng>(None, &public_params)
         .map_err(Into::into)
     };
 
-    lookup_groth_params(
+    Ok(lookup_groth_params(
         format!(
             "STACKED[{}]",
             usize::from(PaddedBytesAmount::from(porep_config))
         ),
         parameters_generator,
-    )
+    )?)
 }
 
 pub fn get_post_params<Tree: 'static + MerkleTreeTrait>(
@@ -117,10 +109,10 @@ pub fn get_post_params<Tree: 'static + MerkleTreeTrait>(
             let post_public_params = winning_post_public_params::<Tree>(post_config)?;
 
             let parameters_generator = || {
-                <FallbackPoStCompound<Tree> as CompoundProof<
-                    FallbackPoSt<'_, Tree>,
-                    FallbackPoStCircuit<Tree>,
-                >>::groth_params::<OsRng>(None, &post_public_params)
+                <fallback::FallbackPoStCompound<Tree> as CompoundProof<
+                    fallback::FallbackPoSt<Tree>,
+                    fallback::FallbackPoStCircuit<Tree>,
+                >>::groth_params::<rand::rngs::OsRng>(None, &post_public_params)
                 .map_err(Into::into)
             };
 
@@ -136,10 +128,10 @@ pub fn get_post_params<Tree: 'static + MerkleTreeTrait>(
             let post_public_params = window_post_public_params::<Tree>(post_config)?;
 
             let parameters_generator = || {
-                <FallbackPoStCompound<Tree> as CompoundProof<
-                    FallbackPoSt<'_, Tree>,
-                    FallbackPoStCircuit<Tree>,
-                >>::groth_params::<OsRng>(None, &post_public_params)
+                <fallback::FallbackPoStCompound<Tree> as CompoundProof<
+                    fallback::FallbackPoSt<Tree>,
+                    fallback::FallbackPoStCircuit<Tree>,
+                >>::groth_params::<rand::rngs::OsRng>(None, &post_public_params)
                 .map_err(Into::into)
             };
 
@@ -156,44 +148,43 @@ pub fn get_post_params<Tree: 'static + MerkleTreeTrait>(
 
 pub fn get_stacked_verifying_key<Tree: 'static + MerkleTreeTrait>(
     porep_config: PoRepConfig,
-) -> Result<Arc<Bls12PreparedVerifyingKey>> {
+) -> Result<Arc<Bls12VerifyingKey>> {
     let public_params = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
         porep_config.porep_id,
-        porep_config.api_version,
     )?;
 
     let vk_generator = || {
-        let vk = <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-            StackedDrg<'_, Tree, DefaultPieceHasher>,
+        <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
+            StackedDrg<Tree, DefaultPieceHasher>,
             _,
-        >>::verifying_key::<OsRng>(None, &public_params)?;
-        Ok(prepare_verifying_key(&vk))
+        >>::verifying_key::<rand::rngs::OsRng>(None, &public_params)
+        .map_err(Into::into)
     };
 
-    lookup_verifying_key(
+    Ok(lookup_verifying_key(
         format!(
             "STACKED[{}]",
             usize::from(PaddedBytesAmount::from(porep_config))
         ),
         vk_generator,
-    )
+    )?)
 }
 
 pub fn get_post_verifying_key<Tree: 'static + MerkleTreeTrait>(
     post_config: &PoStConfig,
-) -> Result<Arc<Bls12PreparedVerifyingKey>> {
+) -> Result<Arc<Bls12VerifyingKey>> {
     match post_config.typ {
         PoStType::Winning => {
             let post_public_params = winning_post_public_params::<Tree>(post_config)?;
 
             let vk_generator = || {
-                let vk = <FallbackPoStCompound<Tree> as CompoundProof<
-                    FallbackPoSt<'_, Tree>,
-                    FallbackPoStCircuit<Tree>,
-                >>::verifying_key::<OsRng>(None, &post_public_params)?;
-                Ok(prepare_verifying_key(&vk))
+                <fallback::FallbackPoStCompound<Tree> as CompoundProof<
+                    fallback::FallbackPoSt<Tree>,
+                    fallback::FallbackPoStCircuit<Tree>,
+                >>::verifying_key::<rand::rngs::OsRng>(None, &post_public_params)
+                .map_err(Into::into)
             };
 
             Ok(lookup_verifying_key(
@@ -208,11 +199,11 @@ pub fn get_post_verifying_key<Tree: 'static + MerkleTreeTrait>(
             let post_public_params = window_post_public_params::<Tree>(post_config)?;
 
             let vk_generator = || {
-                let vk = <FallbackPoStCompound<Tree> as CompoundProof<
-                    FallbackPoSt<'_, Tree>,
-                    FallbackPoStCircuit<Tree>,
-                >>::verifying_key::<OsRng>(None, &post_public_params)?;
-                Ok(prepare_verifying_key(&vk))
+                <fallback::FallbackPoStCompound<Tree> as CompoundProof<
+                    fallback::FallbackPoSt<Tree>,
+                    fallback::FallbackPoStCircuit<Tree>,
+                >>::verifying_key::<rand::rngs::OsRng>(None, &post_public_params)
+                .map_err(Into::into)
             };
 
             Ok(lookup_verifying_key(
