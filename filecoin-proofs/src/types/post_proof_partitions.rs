@@ -1,4 +1,5 @@
-use crate::{constants::SINGLE_PARTITION_PROOF_LEN, types::PoStProofBytesAmount};
+use crate::constants::SINGLE_PARTITION_PROOF_LEN;
+use crate::types::*;
 
 #[derive(Clone, Copy, Debug)]
 pub struct PoStProofPartitions(pub u8);
