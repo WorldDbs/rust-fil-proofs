@@ -1,0 +1,24 @@
+[package]
+name = "storage-proofs"
+description = "Implementations of Proofs of Storage"
+version = "4.0.4"
+authors = ["dignifiedquire <dignifiedquire@gmail.com>", "laser <l@s3r.com>", "porcuquine <porcuquine@users.noreply.github.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+repository = "https://github.com/filecoin-project/rust-fil-proofs"
+readme = "README.md"
+
+[dependencies]
+storage-proofs-core = { path = "./core", version = "4.0.1" }
+storage-proofs-post = { path = "./post", version = "4.0.1" }
+storage-proofs-porep = { path = "./porep", version = "4.0.1" }
+
+[features]
+default = ["gpu"]
+simd = ["storage-proofs-core/simd"]
+asm = ["storage-proofs-core/asm"]
+gpu = ["storage-proofs-core/gpu"]
+measurements = ["storage-proofs-core/measurements"]
+profile = ["measurements"]
+
+
