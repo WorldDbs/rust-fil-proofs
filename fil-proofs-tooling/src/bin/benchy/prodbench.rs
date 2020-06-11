@@ -1,30 +1,28 @@
-use std::fs::remove_file;
-use std::str::FromStr;
-
-use bellperson::{bls::Bls12, util_cs::bench_cs::BenchCS, Circuit};
-use fil_proofs_tooling::{
-    measure,
-    shared::{create_replicas, PROVER_ID, RANDOMNESS, TICKET_BYTES},
-    Metadata,
-};
-use filecoin_hashers::sha256::Sha256Hasher;
+use bellperson::util_cs::bench_cs::BenchCS;
+use bellperson::Circuit;
+use fil_proofs_tooling::shared::{create_replicas, PROVER_ID, RANDOMNESS, TICKET_BYTES};
+use fil_proofs_tooling::{measure, Metadata};
+use filecoin_proofs::constants::{DefaultOctTree, POREP_PARTITIONS};
+use filecoin_proofs::types::PaddedBytesAmount;
+use filecoin_proofs::types::SectorSize;
+use filecoin_proofs::types::*;
 use filecoin_proofs::{
-    clear_cache, parameters::public_params, seal_commit_phase1, seal_commit_phase2,
-    validate_cache_for_commit, DefaultOctLCTree, DefaultOctTree, PaddedBytesAmount, PoRepConfig,
-    PoRepProofPartitions, SectorSize, DRG_DEGREE, EXP_DEGREE, LAYERS, POREP_MINIMUM_CHALLENGES,
-    POREP_PARTITIONS,
+    clear_cache, constants::DefaultOctLCTree, seal_commit_phase1, seal_commit_phase2,
+    validate_cache_for_commit, PoRepConfig,
 };
 use log::info;
+use paired::bls12_381::Bls12;
 use rand::SeedableRng;
 use rand_xorshift::XorShiftRng;
 use serde::{Deserialize, Serialize};
+use storage_proofs::compound_proof::CompoundProof;
+use storage_proofs::hasher::Sha256Hasher;
 #[cfg(feature = "measurements")]
-use storage_proofs_core::measurements::{Operation, OP_MEASUREMENTS};
-use storage_proofs_core::{
-    api_version::ApiVersion, compound_proof::CompoundProof, parameter_cache::CacheableParameters,
-    proof::ProofScheme,
-};
-use storage_proofs_porep::stacked::{LayerChallenges, SetupParams, StackedCompound, StackedDrg};
+use storage_proofs::measurements::Operation;
+#[cfg(feature = "measurements")]
+use storage_proofs::measurements::OP_MEASUREMENTS;
+use storage_proofs::parameter_cache::CacheableParameters;
+use storage_proofs::proof::ProofScheme;
 
 const SEED: [u8; 16] = [
     0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc, 0xe5,
@@ -49,15 +47,11 @@ pub struct ProdbenchInputs {
     stacked_layers: u64,
     /// How many sectors should be created in parallel.
     num_sectors: u64,
-    api_version: String,
 }
 
 impl ProdbenchInputs {
     pub fn sector_size_bytes(&self) -> u64 {
-        bytefmt::parse(&self.sector_size).expect("failed to parse sector size")
-    }
-    pub fn api_version(&self) -> ApiVersion {
-        ApiVersion::from_str(&self.api_version).expect("failed to parse api version")
+        bytefmt::parse(&self.sector_size).unwrap()
     }
 }
 
@@ -116,39 +110,40 @@ fn augment_with_op_measurements(mut output: &mut ProdbenchOutputs) {
         .expect("failed to acquire lock on rx side of perf channel");
 
     for m in measurements.iter() {
+        use Operation::*;
         let cpu_time = m.cpu_time.as_millis() as u64;
         let wall_time = m.wall_time.as_millis() as u64;
 
         match m.op {
-            Operation::GenerateTreeC => {
+            GenerateTreeC => {
                 output.generate_tree_c_cpu_time_ms = cpu_time;
                 output.generate_tree_c_wall_time_ms = wall_time;
             }
-            Operation::GenerateTreeRLast => {
+            GenerateTreeRLast => {
                 output.tree_r_last_cpu_time_ms = cpu_time;
                 output.tree_r_last_wall_time_ms = wall_time;
             }
-            Operation::CommD => {
+            CommD => {
                 output.comm_d_cpu_time_ms = cpu_time;
                 output.comm_d_wall_time_ms = wall_time;
             }
-            Operation::EncodeWindowTimeAll => {
+            EncodeWindowTimeAll => {
                 output.encode_window_time_all_cpu_time_ms = cpu_time;
                 output.encode_window_time_all_wall_time_ms = wall_time;
             }
-            Operation::WindowCommLeavesTime => {
+            WindowCommLeavesTime => {
                 output.window_comm_leaves_time_cpu_time_ms = cpu_time;
                 output.window_comm_leaves_time_wall_time_ms = wall_time;
             }
-            Operation::PorepCommitTime => {
+            PorepCommitTime => {
                 output.porep_commit_time_cpu_time_ms = cpu_time;
                 output.porep_commit_time_wall_time_ms = wall_time;
             }
-            Operation::AddPiece => {
+            AddPiece => {
                 output.add_piece_cpu_time_ms = cpu_time;
                 output.add_piece_wall_time_ms = wall_time;
             }
-            Operation::GeneratePieceCommitment => {
+            GeneratePieceCommitment => {
                 output.generate_piece_commitment_cpu_time_ms = cpu_time;
                 output.generate_piece_commitment_wall_time_ms = wall_time;
             }
@@ -158,17 +153,17 @@ fn augment_with_op_measurements(mut output: &mut ProdbenchOutputs) {
 }
 
 fn configure_global_config(inputs: &ProdbenchInputs) {
-    LAYERS
+    filecoin_proofs::constants::LAYERS
         .write()
-        .expect("LAYERS poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.stacked_layers as usize);
-    POREP_PARTITIONS
+    filecoin_proofs::constants::POREP_PARTITIONS
         .write()
-        .expect("POREP_PARTITIONS poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.porep_partitions);
-    POREP_MINIMUM_CHALLENGES
+    filecoin_proofs::constants::POREP_MINIMUM_CHALLENGES
         .write()
-        .expect("POREP_MINIMUM_CHALLENGES poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.porep_challenges);
 }
 
@@ -193,7 +188,6 @@ pub fn run(
         inputs.num_sectors as usize,
         only_add_piece,
         arbitrary_porep_id,
-        inputs.api_version(),
     );
 
     if only_add_piece || only_replicate {
@@ -202,7 +196,7 @@ pub fn run(
             .expect("failed to retrieve metadata");
     }
 
-    let (created, replica_measurement) = repls.expect("unreachable: only_add_piece==false");
+    let (created, replica_measurement) = repls.unwrap();
     generate_params(&inputs);
 
     if !skip_seal_proof {
@@ -246,7 +240,7 @@ pub fn run(
 
     // Clean-up persisted replica files.
     for (_, info) in &created {
-        remove_file(info.private_replica_info.replica_path())
+        std::fs::remove_file(info.private_replica_info.replica_path())
             .expect("failed to remove sealed replica file");
     }
 
@@ -258,7 +252,17 @@ pub fn run(
 
 #[derive(Default, Debug, Serialize)]
 struct CircuitOutputs {
+    // porep_snark_partition_constraints
     pub porep_constraints: usize,
+    // replica_inclusion (constraints: single merkle path pedersen)
+    // data_inclusion (constraints: sha merklepath)
+    // window_inclusion (constraints: merkle inclusion path in comm_c)
+    // ticket_constraints - (skip)
+    // replica_inclusion (constraints: single merkle path pedersen)
+    // column_leaf_hash_constraints - (64 byte * stacked layers) pedersen_md
+    // kdf_constraints
+    // merkle_tree_datahash_constraints - sha2 constraints 64
+    // merkle_tree_hash_constraints - 64 byte pedersen
 }
 
 fn run_measure_circuits(i: &ProdbenchInputs) -> CircuitOutputs {
@@ -268,10 +272,14 @@ fn run_measure_circuits(i: &ProdbenchInputs) -> CircuitOutputs {
 }
 
 fn measure_porep_circuit(i: &ProdbenchInputs) -> usize {
+    use storage_proofs::porep::stacked::{
+        LayerChallenges, SetupParams, StackedCompound, StackedDrg,
+    };
+
     let layers = i.stacked_layers as usize;
     let challenge_count = i.porep_challenges as usize;
-    let drg_degree = DRG_DEGREE;
-    let expansion_degree = EXP_DEGREE;
+    let drg_degree = filecoin_proofs::constants::DRG_DEGREE;
+    let expansion_degree = filecoin_proofs::constants::EXP_DEGREE;
     let nodes = (i.sector_size_bytes() / 32) as usize;
     let layer_challenges = LayerChallenges::new(layers, challenge_count);
 
@@ -282,17 +290,16 @@ fn measure_porep_circuit(i: &ProdbenchInputs) -> usize {
         expansion_degree,
         porep_id: arbitrary_porep_id,
         layer_challenges,
-        api_version: i.api_version(),
     };
 
-    let pp = StackedDrg::<ProdbenchTree, Sha256Hasher>::setup(&sp).expect("failed to setup DRG");
+    let pp = StackedDrg::<ProdbenchTree, Sha256Hasher>::setup(&sp).unwrap();
 
     let mut cs = BenchCS::<Bls12>::new();
     <StackedCompound<_, _> as CompoundProof<StackedDrg<ProdbenchTree, Sha256Hasher>, _>>::blank_circuit(
         &pp,
     )
-        .synthesize(&mut cs)
-        .expect("failed to synthesize stacked compound");
+    .synthesize(&mut cs)
+    .unwrap();
 
     cs.num_constraints()
 }
@@ -302,7 +309,7 @@ fn generate_params(i: &ProdbenchInputs) {
     let partitions = PoRepProofPartitions(
         *POREP_PARTITIONS
             .read()
-            .expect("POREP_PARTITIONS poisoned")
+            .unwrap()
             .get(&i.sector_size_bytes())
             .expect("unknown sector size"),
     );
@@ -316,18 +323,20 @@ fn generate_params(i: &ProdbenchInputs) {
         sector_size,
         partitions,
         porep_id: dummy_porep_id,
-        api_version: i.api_version(),
     });
 }
 
 fn cache_porep_params(porep_config: PoRepConfig) {
+    use filecoin_proofs::parameters::public_params;
+    use storage_proofs::porep::stacked::{StackedCompound, StackedDrg};
+
+    let dummy_porep_id = [0; 32];
     let public_params = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
-        porep_config.porep_id,
-        porep_config.api_version,
+        dummy_porep_id,
     )
-    .expect("failed to get public_params");
+    .unwrap();
 
     {
         let circuit = <StackedCompound<ProdbenchTree, _> as CompoundProof<
