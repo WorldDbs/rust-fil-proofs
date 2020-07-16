@@ -1,9 +1,8 @@
-use std::io::{Cursor, Read};
+use std::io::{self, Read};
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion, ParameterizedBenchmark, Throughput};
-use filecoin_proofs::{add_piece, PaddedBytesAmount, UnpaddedBytesAmount};
-use fr32::Fr32Reader;
+use filecoin_proofs::fr32_reader::Fr32Reader;
 use rand::{thread_rng, Rng};
 
 #[cfg(feature = "cpu-profile")]
@@ -11,9 +10,9 @@ use rand::{thread_rng, Rng};
 fn start_profile(stage: &str) {
     gperftools::profiler::PROFILER
         .lock()
-        .expect("PROFILER poisoned")
+        .unwrap()
         .start(format!("./{}.profile", stage))
-        .expect("failed to start profiler");
+        .unwrap();
 }
 
 #[cfg(not(feature = "cpu-profile"))]
@@ -25,9 +24,9 @@ fn start_profile(_stage: &str) {}
 fn stop_profile() {
     gperftools::profiler::PROFILER
         .lock()
-        .expect("PROFILER poisoned")
+        .unwrap()
         .stop()
-        .expect("failed to start profiler");
+        .unwrap();
 }
 
 #[cfg(not(feature = "cpu-profile"))]
@@ -50,10 +49,9 @@ fn preprocessing_benchmark(c: &mut Criterion) {
 
                 start_profile(&format!("write_padded_{}", *size));
                 b.iter(|| {
-                    let mut reader = Fr32Reader::new(Cursor::new(&data));
-                    reader.read_to_end(&mut buf).expect("in memory read error");
+                    let mut reader = Fr32Reader::new(io::Cursor::new(&data));
+                    reader.read_to_end(&mut buf).unwrap();
                     assert!(buf.len() >= data.len());
-                    buf.clear();
                 });
                 stop_profile();
             },
@@ -65,37 +63,5 @@ fn preprocessing_benchmark(c: &mut Criterion) {
     );
 }
 
-fn add_piece_benchmark(c: &mut Criterion) {
-    c.bench(
-        "preprocessing",
-        ParameterizedBenchmark::new(
-            "add_piece",
-            |b, size| {
-                let padded_size = PaddedBytesAmount(*size as u64);
-                let unpadded_size: UnpaddedBytesAmount = padded_size.into();
-                let data = random_data(unpadded_size.0 as usize);
-                let mut buf = Vec::with_capacity(*size);
-
-                start_profile(&format!("add_piece_{}", *size));
-                b.iter(|| {
-                    add_piece(
-                        Cursor::new(&data),
-                        &mut buf,
-                        unpadded_size,
-                        &[unpadded_size][..],
-                    )
-                    .unwrap();
-                    buf.clear();
-                });
-                stop_profile();
-            },
-            vec![512, 256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024],
-        )
-        .sample_size(10)
-        .throughput(|s| Throughput::Bytes(*s as u64))
-        .warm_up_time(Duration::from_secs(1)),
-    );
-}
-
-criterion_group!(benches, preprocessing_benchmark, add_piece_benchmark);
+criterion_group!(benches, preprocessing_benchmark);
 criterion_main!(benches);
