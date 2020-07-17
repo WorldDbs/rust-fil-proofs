@@ -11,8 +11,7 @@ use filecoin_proofs::{
 };
 use log::info;
 use serde::Serialize;
-use storage_proofs_core::api_version::ApiVersion;
-use storage_proofs_core::merkle::MerkleTreeTrait;
+use storage_proofs::merkle::MerkleTreeTrait;
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -48,7 +47,6 @@ impl Report {
 
 pub fn run_fallback_post_bench<Tree: 'static + MerkleTreeTrait>(
     sector_size: u64,
-    api_version: ApiVersion,
 ) -> anyhow::Result<()> {
     if WINNING_POST_SECTOR_COUNT != 1 {
         return Err(anyhow!(
@@ -56,8 +54,7 @@ pub fn run_fallback_post_bench<Tree: 'static + MerkleTreeTrait>(
         ));
     }
     let arbitrary_porep_id = [66; 32];
-    let (sector_id, replica_output) =
-        create_replica::<Tree>(sector_size, arbitrary_porep_id, api_version);
+    let (sector_id, replica_output) = create_replica::<Tree>(sector_size, arbitrary_porep_id);
 
     // Store the replica's private and publicly facing info for proving and verifying respectively.
     let pub_replica_info = vec![(sector_id, replica_output.public_replica_info)];
@@ -69,7 +66,6 @@ pub fn run_fallback_post_bench<Tree: 'static + MerkleTreeTrait>(
         challenge_count: WINNING_POST_CHALLENGE_COUNT,
         typ: PoStType::Winning,
         priority: true,
-        api_version,
     };
 
     let gen_winning_post_sector_challenge_measurement = measure(|| {
@@ -126,16 +122,12 @@ pub fn run_fallback_post_bench<Tree: 'static + MerkleTreeTrait>(
     Ok(())
 }
 
-pub fn run(sector_size: usize, api_version: ApiVersion) -> anyhow::Result<()> {
-    info!(
-        "Benchy Winning PoSt: sector-size={}, api_version={}",
-        sector_size, api_version
-    );
+pub fn run(sector_size: usize) -> anyhow::Result<()> {
+    info!("Benchy Winning PoSt: sector-size={}", sector_size,);
 
     with_shape!(
         sector_size as u64,
         run_fallback_post_bench,
-        sector_size as u64,
-        api_version,
+        sector_size as u64
     )
 }
