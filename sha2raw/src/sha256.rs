@@ -1,9 +1,9 @@
-use byteorder::{ByteOrder, BE};
-use lazy_static::lazy_static;
+use block_buffer::byteorder::{ByteOrder, BE};
 
-use crate::{consts::H256, platform::Implementation};
+use crate::consts::H256;
+use crate::platform::Implementation;
 
-lazy_static! {
+lazy_static::lazy_static! {
     static ref IMPL: Implementation = Implementation::detect();
 }
 
@@ -79,7 +79,7 @@ impl Sha256 {
     }
 }
 
-opaque_debug::implement!(Sha256);
+opaque_debug::impl_opaque_debug!(Sha256);
 
 #[cfg(test)]
 mod tests {
