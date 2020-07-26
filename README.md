@@ -28,12 +28,6 @@ There are currently several different crates:
 - [**Filecoin Proofs (`filecoin-proofs`)**](./filecoin-proofs)
   A wrapper around `storage-proofs`, providing an FFI-exported API callable from C (and in practice called by [lotus](https://github.com/filecoin-project/lotus) via cgo). Filecoin-specific values of setup parameters are included here.
 
-## Security Audits
-
-The `rust-fil-proofs` proofs code and the [Filecoin Spec](https://bafybeidxw5vxjdwsun2zc2illagf43v6w5r5w63vg455h7vjesbyqssg64.ipfs.dweb.link/algorithms/sdr/) has undergone a [proofs security audit](audits/Sigma-Prime-Protocol-Labs-Filecoin-Proofs-Security-Review-v2.1.pdf) performed by [Sigma Prime](https://sigmaprime.io/) and been deemed free of *critical* or *major* security issues.  In addition to the security review, the document provides the summary of findings, vulnerability classifications, and recommended resolutions.  All known issues have been resolved to date in both the code and the specification.
-
-`rust-fil-proofs` has also undergone a [SNARK proofs security audit performed by Dr. Jean-Philippe Aumasson and Antony Vennard](audits/protocolai-audit-20200728.pdf) and been deemed free of *critical* or *major* security issues.  In addition to the security analysis, the document provides the audit goals, methodology, functionality descriptions and finally observations on what could be improved.  All known issues have been resolved to date.
-
 ## Design Notes
 
 Earlier in the design process, we considered implementing what has become the **FPS** in Go – as a wrapper around potentially multiple SNARK circuit libraries. We eventually decided to use [bellman](https://github.com/zkcrypto/bellman) – a library developed by Zcash, which supports efficient pedersen hashing inside of SNARKs. Having made that decision, it was natural and efficient to implement the entire subsystem in Rust. We considered the benefits (self-contained codebase, ability to rely on static typing across layers) and costs (developer ramp-up, sometimes unwieldiness of borrow-checker) as part of that larger decision and determined that the overall project benefits (in particular ability to build on Zcash’s work) outweighed the costs.
@@ -54,10 +48,7 @@ The instructions below assume you have independently installed `rust-fil-proofs`
 
 **NOTE:** `rust-fil-proofs` can only be built for and run on 64-bit platforms; building will panic if the target architecture is not 64-bits.
 
-Before building you will need OpenCL to be installed. On Ubuntu, this can be achieved with `apt install ocl-icd-opencl-dev`.  Other system dependencies such as 'gcc/clang', 'wall' and 'cmake' are also required.
-
-You will also need to install the hwloc library. On Ubuntu, this can be achieved with `apt install hwloc libhwloc-dev`. For other platforms, please see the [hwloc-rs Prerequisites section](https://github.com/daschl/hwloc-rs).
-
+Before building you will need OpenCL to be installed, on Ubuntu this can be achieved with `apt install ocl-icd-opencl-dev`.  Other system dependencies such as 'gcc/clang', 'wall' and 'cmake' are also required.
 
 ```
 > cargo build --release --all
@@ -74,42 +65,11 @@ You will also need to install the hwloc library. On Ubuntu, this can be achieved
 The main benchmarking tool is called `benchy`.  `benchy` has several subcommands, including `merkleproofs`, `prodbench`, `winning_post` and `window_post`.  You can run them with various configuration options, but some examples are below:
 
 ```
-> cargo run --release --bin benchy -- merkleproofs --size 2
-> cargo run --release --bin benchy -- winning-post --size 2
-> cargo run --release --bin benchy -- window-post --size 2
-> cargo run --release --bin benchy -- prodbench
+> cargo run --release--bin benchy -- merkleproofs --size 2
+> cargo run --release--bin benchy -- winning-post --size 2
+> cargo run --release--bin benchy -- window-post --size 2
+> cargo run --release--bin benchy -- prodbench
 ```
-
-### Window PoSt Bench usages
-
-The Window PoSt bench can be used a number of ways, some of which are detailed here.
-
-First, you can run the benchmark and preserve the working directory like this:
-```
-cargo run --release --bin benchy -- window-post --size 2KiB --cache window-post-2KiB-dir --preserve-cache
-```
-
-Then if you want to run the benchmark again to test commit-phase2, you can quickly run it like this:
-```
-cargo run --release --bin benchy -- window-post --size 2KiB --skip-precommit-phase1 --skip-precommit-phase2 --skip-commit-phase1 --cache window-post-2KiB-dir
-```
-
-Alternatively, if you want to test just GPU tree building, you can run it like this:
-```
-cargo run --release --bin benchy -- window-post --size 2KiB --skip-precommit-phase1 --skip-commit-phase1 --skip-commit-phase2 --cache window-post-2KiB-dir
-```
-
-Note that some combinations of arguments will cause destructive changes to your cached directory.  For larger benchmark sector sizes, it is recommended that once you create an initial cache, that it be saved to an alternate location in the case that it is corrupted by a test run.  For example, the following run sequence will be guaranteed to corrupt your cache:
-
-```
-# Do NOT run this sequence.  For illustrative purposes only:
-# Generate clean cache
-cargo run --release --bin benchy -- window-post --size 2KiB --cache window-post-2KiB-dir --preserve-cache
-# Skip all stages except the first
-cargo run --release --bin benchy -- window-post --size 2KiB --skip-precommit-phase2 --skip-commit-phase1 --skip-commit-phase2 --cache broken-cache-dir
-```
-
-The reason this fails is because new random piece data is generated (rather than loaded from disk from a previous run) in the first step, and then we attempt to use it in later sealing steps using data from previously preserved run.  This cannot work.
 
 There is also a bench called `gpu-cpu-test`:
 
@@ -169,27 +129,29 @@ Filecoin proof parameter files are expected to be located in `/var/tmp/filecoin-
 FIL_PROOFS_PARAMETER_CACHE=/path/to/parameters
 ```
 
-If you are running a node that is expected to be using production parameters (i.e. the ones specified in the parameters.json file within this repo), you can optionally verify your on-disk parameters using an environment variable
-
-```
-FIL_PROOFS_VERIFY_PRODUCTION_PARAMS=1
-```
-
-By default, this verification is disabled.
-
 ## Optimizing for either speed or memory during replication
 
 While replicating and generating the Merkle Trees (MT) for the proof at the same time there will always be a time-memory trade-off to consider, we present here strategies to optimize one at the cost of the other.
 
 ### Speed
 
-One of the most computationally expensive operations during replication (besides the encoding itself) is the generation of the indexes of the (expansion) parents in the Stacked graph, implemented through a Feistel cipher (used as a pseudorandom permutation). To reduce that time we provide a caching mechanism to generate them only once and reuse them throughout replication (across the different layers).
+One of the most computational expensive operations during replication (besides the encoding itself) is the generation of the indexes of the (expansion) parents in the Stacked graph, implemented through a Feistel cipher (used as a pseudorandom permutation). To reduce that time we provide a caching mechanism to generate them only once and reuse them throughout replication (across the different layers). Already built into the system it can be activated with the environmental variable
+
+```
+FIL_PROOFS_MAXIMIZE_CACHING=1
+```
+
+To check that it's working you can inspect the replication log to find `using parents cache of unlimited size`. As the log indicates, we don't have a fine grain control at the moment so it either stores all parents or none. This cache will add about 1.5x the entire sector size to the disk cache used during replication, and a configurable sliding window of cached data is used as memory overhead.  This setting is _very recommended_ as it has a considerable impact on replication time.
+
+You can also verify if the cache is working by inspecting the time each layer takes to encode, `encoding, layer:` in the log, where the first two layers, forward and reverse, will take more time than the rest to populate the cache while the remaining 8 should see a considerable time drop.
+
+Note that this setting is enabled by `default`.  It can be disabled by setting the value to 0.
+
+A related setting that can also be tuned is the SDR parents cache size.  This value is defaulted to 2048 nodes, which is the equivalent of 112KiB of resident memory (where each cached node consists of DEGREE (base + exp = 6 + 8) x 4 byte elements = 56 bytes in length).  Given that the cache is now located on disk, it is memory mapped when accessed in window sizes related to this variable.  This default was chosen to minimize memory while still allowing efficient access to the cache.  If you would like to experiment with alternate sizes, you can modify the environment variable
 
 ```
 FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=2048
 ```
-
-This value is defaulted to 2048 nodes, which is the equivalent of 112KiB of resident memory (where each cached node consists of DEGREE (base + exp = 6 + 8) x 4 byte elements = 56 bytes in length).  Given that the cache is now located on disk, it is memory mapped when accessed in window sizes related to this variable.  This default was chosen to minimize memory while still allowing efficient access to the cache.  If you would like to experiment with alternate sizes, you can modify the environment variable
 
 Increasing this value will increase the amount of resident RAM used.
 
@@ -203,49 +165,15 @@ Using the above, the cache data would be located at `/path/to/parent/cache/filec
 
 Alternatively, use `FIL_PROOFS_CACHE_DIR=/path/to/parent/cache`, in which the parent cache will be located in `$FIL_PROOFS_CACHE_DIR/filecoin-parents`.  Note that if you're using `FIL_PROOFS_CACHE_DIR`, it must be set through the environment and cannot be set using the configuration file.  This setting has no effect if `FIL_PROOFS_PARENT_CACHE` is also specified.
 
-If you are concerned about the integrity of your on-disk parent cache files, they can be verified at runtime when accessed for the first time using an environment variable
-
-```
-FIL_PROOFS_VERIFY_CACHE=1
-```
-
-If they are inconsistent (compared to the manifest in storage-proofs/porep/parent-cache.json), they will be automatically re-generated at runtime.  If that cache generation fails, it will be reported as an error.
-
-```
-FIL_PROOFS_USE_MULTICORE_SDR
-```
-
-When performing SDR replication (Precommit Phase 1) using only a single core, memory access to fetch a node's parents is
-a bottleneck. Multicore SDR uses multiple cores (which should be restricted to a single core complex for shared cache) to
-assemble each nodes parents and perform some prehashing. This setting is not enabled by default but can be activated by
-setting `FIL_PROOFS_USE_MULTICORE_SDR=1`.
-
-Best performance will also be achieved when it is possible to lock pages which have been memory-mapped. This can be
-accomplished by running the process as a non-root user, and increasing the system limit for max locked memory with `ulimit
--l`. Alternatively, the process can be run as root, if its total locked pages will fit inside physical memory. Otherwise, the OOM-killer may be invoked. Two sector size's worth of data (for current and previous layers) must be locked -- along with 56 *
-`FIL_PROOFS_PARENT_CACHE_SIZE` bytes for the parent cache.
-
-Default parameters have been tuned to provide good performance on the AMD Ryzen Threadripper 3970x. It may be useful to
-experiment with these, especially on different hardware. We have made an effort to use sensible heuristics and to ensure
-reasonable behavior for a range of configurations and hardware, but actual performance or behavior of multicore
-replication is not yet well tested except on our target. The following settings may be useful, but do expect some
-failure in the search for good parameters. This might take the form of failed replication (bad proofs), errors during
-replication, or even potentially crashes if parameters prove pathological. For now, this is an experimental feature, and
-only the default configuration on default hardware (3970x) is known to work well.
-
-`FIL_PROOFS_MULTICORE_SDR_PRODUCERS`: This is the number of worker threads loading node parents in parallel. The default is `3` so the producers and main thread together use a full core complex (but no more).
-`FIL_PROOFS_MULTICORE_SDR_PRODUCER_STRIDE`: This is the (max) number of nodes for which a producer thread will load parents in each iteration of its loop. The default is`128`.
-`FIL_PROOFS_MULTICORE_SDR_LOOKAHEAD`: This is the size of the lookahead buffer into which node parents are pre-loaded by the producer threads. The default is 800.
-
 ### GPU Usage
 
-The column hashed tree 'tree_c' can optionally be built using the GPU with noticeable speed-up over the CPU.  To activate the GPU for this, use the environment variable
+We can now optionally build the column hashed tree 'tree_c' using the GPU with noticeable speed-up over the CPU.  To activate the GPU for this, use the environment variable
 
 ```
 FIL_PROOFS_USE_GPU_COLUMN_BUILDER=1
 ```
 
-Similarly, the 'tree_r_last' tree can also be built using the GPU, which provides at least a 2x speed-up over the CPU.  To activate the GPU for this, use the environment variable
+We can optionally also build 'tree_r_last' using the GPU, which provides at least a 2x speed-up over the CPU.  To activate the GPU for this, use the environment variable
 
 ```
 FIL_PROOFS_USE_GPU_TREE_BUILDER=1
@@ -255,15 +183,7 @@ Note that *both* of these GPU options can and should be enabled if a supported G
 
 ### Advanced GPU Usage
 
-When using the GPU to build 'tree_r_last' (using `FIL_PROOFS_USE_GPU_TREE_BUILDER=1`), an experimental variable can be tested for local optimization of your hardware.
-
-```
-FIL_PROOFS_MAX_GPU_TREE_BATCH_SIZE=Z
-```
-
-The default batch size value is 700,000 tree nodes.
-
-When using the GPU to build 'tree_c' (using `FIL_PROOFS_USE_GPU_COLUMN_BUILDER=1`), two experimental variables can be tested for local optimization of your hardware.  First, you can set
+If using the GPU to build tree_c (using `FIL_PROOFS_USE_GPU_COLUMN_BUILDER=1`), two experimental variables can be tested for local optimization of your hardware.  First, you can set
 
 ```
 FIL_PROOFS_MAX_GPU_COLUMN_BATCH_SIZE=X
@@ -271,13 +191,17 @@ FIL_PROOFS_MAX_GPU_COLUMN_BATCH_SIZE=X
 
 The default value for this is 400,000, which means that we compile 400,000 columns at once and pass them in batches to the GPU.  Each column is a "single node x the number of layers" (e.g. a 32GiB sector has 11 layers, so each column consists of 11 nodes).  This value is used as both a reasonable default, but it's also measured that it takes about as much time to compile this size batch as it does for the GPU to consume it (using the 2080ti for testing), which we do in parallel for maximized throughput.  Changing this value may exhaust GPU RAM if set too large, or may decrease performance if set too low.  This setting is made available for your experimentation during this step.
 
-The second variable that may affect overall 'tree_c' performance is the size of the parallel write buffers when storing the tree data returned from the GPU.  This value is set to a reasonable default of 262,144, but you may adjust it as needed if an individual performance benefit can be achieved.  To adjust this value, use the environment variable
+The second variable that may affect performance is the size of the parallel write buffers when storing the tree data returned from the GPU.  This value is set to a reasonable default of 262,144, but you may adjust it as needed if an individual performance benefit can be achieved.  To adjust this value, use the environment variable
 
 ```
 FIL_PROOFS_COLUMN_WRITE_BATCH_SIZE=Y
 ```
 
-Note that this value affects the degree of parallelism used when persisting the column tree to disk, and may exhaust system file descriptors if the limit is not adjusted appropriately (e.g. using `ulimit -n`).  If persisting the tree is failing due to a 'bad file descriptor' error, try adjusting this value to something larger (e.g. 524288, or 1048576).  Increasing this value processes larger chunks at once, which results in larger (but fewer) disk writes in parallel.
+A similar option for building 'tree_r_last' exists.  The default batch size is 700,000 tree nodes.  To adjust this, use the environment variable
+
+```
+FIL_PROOFS_MAX_GPU_TREE_BATCH_SIZE=Z
+```
 
 ### Memory
 
@@ -333,19 +257,6 @@ To generate the API documentation locally, follow the instructions to generate d
 
 - [Go implementation of filecoin-proofs sectorbuilder API](https://github.com/filecoin-project/go-sectorbuilder/blob/master/sectorbuilder.go) and [associated interface structures](https://github.com/filecoin-project/go-sectorbuilder/blob/master/interface.go).
 
-
-## Building for Arm64
-
-In order to build for arm64 the current requirements are
-
-- nightly rust compiler
-
-Example for building `filecoin-proofs`
-
-```
-$ rustup +nightly target add aarch64-unknown-linux-gnu
-$ cargo +nightly build -p filecoin-proofs --release --target aarch64-unknown-linux-gnu
-```
 
 ## Contributing
 
