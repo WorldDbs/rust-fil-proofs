@@ -1,20 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use storage_proofs_core::{
-    api_version::ApiVersion,
-    merkle::MerkleTreeTrait,
-    parameter_cache::{
-        parameter_cache_metadata_path, parameter_cache_params_path,
-        parameter_cache_verifying_key_path, CacheableParameters,
-    },
-};
-use storage_proofs_post::fallback::{FallbackPoStCircuit, FallbackPoStCompound};
+use storage_proofs::parameter_cache::{self, CacheableParameters};
+use storage_proofs::post::fallback;
 
-use crate::{
-    parameters::{window_post_public_params, winning_post_public_params},
-    types::{PaddedBytesAmount, SectorSize, UnpaddedBytesAmount},
-};
+use crate::types::*;
 
 #[derive(Clone, Debug)]
 pub struct PoStConfig {
@@ -24,7 +14,6 @@ pub struct PoStConfig {
     pub typ: PoStType,
     /// High priority (always runs on GPU) == true
     pub priority: bool,
-    pub api_version: ApiVersion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,36 +49,40 @@ impl PoStConfig {
     pub fn get_cache_identifier<Tree: 'static + MerkleTreeTrait>(&self) -> Result<String> {
         match self.typ {
             PoStType::Winning => {
-                let params = winning_post_public_params::<Tree>(self)?;
+                let params = crate::parameters::winning_post_public_params::<Tree>(self)?;
 
-                Ok(<FallbackPoStCompound<Tree> as CacheableParameters<
-                    FallbackPoStCircuit<Tree>,
-                    _,
-                >>::cache_identifier(&params))
+                Ok(
+                    <fallback::FallbackPoStCompound<Tree> as CacheableParameters<
+                        fallback::FallbackPoStCircuit<Tree>,
+                        _,
+                    >>::cache_identifier(&params),
+                )
             }
             PoStType::Window => {
-                let params = window_post_public_params::<Tree>(self)?;
+                let params = crate::parameters::window_post_public_params::<Tree>(self)?;
 
-                Ok(<FallbackPoStCompound<Tree> as CacheableParameters<
-                    FallbackPoStCircuit<Tree>,
-                    _,
-                >>::cache_identifier(&params))
+                Ok(
+                    <fallback::FallbackPoStCompound<Tree> as CacheableParameters<
+                        fallback::FallbackPoStCircuit<Tree>,
+                        _,
+                    >>::cache_identifier(&params),
+                )
             }
         }
     }
 
     pub fn get_cache_metadata_path<Tree: 'static + MerkleTreeTrait>(&self) -> Result<PathBuf> {
         let id = self.get_cache_identifier::<Tree>()?;
-        Ok(parameter_cache_metadata_path(&id))
+        Ok(parameter_cache::parameter_cache_metadata_path(&id))
     }
 
     pub fn get_cache_verifying_key_path<Tree: 'static + MerkleTreeTrait>(&self) -> Result<PathBuf> {
         let id = self.get_cache_identifier::<Tree>()?;
-        Ok(parameter_cache_verifying_key_path(&id))
+        Ok(parameter_cache::parameter_cache_verifying_key_path(&id))
     }
 
     pub fn get_cache_params_path<Tree: 'static + MerkleTreeTrait>(&self) -> Result<PathBuf> {
         let id = self.get_cache_identifier::<Tree>()?;
-        Ok(parameter_cache_params_path(&id))
+        Ok(parameter_cache::parameter_cache_params_path(&id))
     }
 }
