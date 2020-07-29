@@ -2,14 +2,14 @@ use std::fs::{create_dir, remove_dir_all};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use filecoin_hashers::Hasher;
 use filecoin_proofs::with_shape;
 use log::{debug, info};
 use rand::{thread_rng, Rng};
-use storage_proofs_core::merkle::{
+use storage_proofs::hasher::Hasher;
+use storage_proofs::merkle::{
     generate_tree, get_base_tree_count, MerkleProofTrait, MerkleTreeTrait, MerkleTreeWrapper,
 };
-use storage_proofs_core::util::default_rows_to_discard;
+use storage_proofs::util::default_rows_to_discard;
 use typenum::Unsigned;
 
 fn generate_proofs<R: Rng, Tree: MerkleTreeTrait>(
@@ -26,32 +26,18 @@ fn generate_proofs<R: Rng, Tree: MerkleTreeTrait>(
     proofs_count: usize,
     validate: bool,
 ) -> Result<()> {
-    let proofs_count = if proofs_count >= nodes {
-        info!(
-            "requested {} proofs, but instead challenging all {} nodes sequentially",
-            proofs_count, nodes
-        );
-
-        nodes
-    } else {
-        proofs_count
-    };
-
     info!(
         "creating {} inclusion proofs over {} nodes (validate enabled? {})",
         proofs_count, nodes, validate
     );
 
+    let proofs_count = std::cmp::min(nodes, proofs_count);
     let rows_to_discard = default_rows_to_discard(
         base_tree_nodes,
         <Tree as MerkleTreeTrait>::Arity::to_usize(),
     );
     for i in 0..proofs_count {
-        let challenge = if proofs_count == nodes {
-            i
-        } else {
-            rng.gen_range(0, nodes)
-        };
+        let challenge = rng.gen_range(0, nodes);
         debug!("challenge[{}] = {}", i, challenge);
         let proof = tree
             .gen_cached_proof(challenge, Some(rows_to_discard))
@@ -85,7 +71,7 @@ pub fn run_merkleproofs_bench<Tree: 'static + MerkleTreeTrait>(
     let (_data, tree) = generate_tree::<Tree, _>(
         &mut rng,
         base_tree_leaves * tree_count,
-        Some(temp_path.clone()),
+        Some(temp_path.to_path_buf()),
     );
     generate_proofs::<_, Tree>(
         &mut rng,
