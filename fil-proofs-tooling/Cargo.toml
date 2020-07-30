@@ -1,7 +1,7 @@
 [package]
 name = "fil-proofs-tooling"
 description = "Tooling for rust-fil-proofs"
-version = "6.0.1"
+version = "4.0.4"
 authors = ["dignifiedquire <dignifiedquire@gmail.com>"]
 license = "MIT OR Apache-2.0"
 publish = false
@@ -10,76 +10,48 @@ repository = "https://github.com/filecoin-project/rust-fil-proofs"
 readme = "README.md"
 
 [dependencies]
-storage-proofs-core = { path = "../storage-proofs-core", version = "^7.0.0", default-features = false}
-storage-proofs-porep = { path = "../storage-proofs-porep", version = "^7.0.0", default-features = false }
-storage-proofs-post = { path = "../storage-proofs-post", version = "^7.0.0", default-features = false }
-filecoin-proofs = { path = "../filecoin-proofs", default-features = false }
-filecoin-hashers = { path = "../filecoin-hashers", default-features = false, features = ["poseidon", "blake2s", "sha256"] }
 clap = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.5"
+permutate = "0.3"
 lazy_static = "1.2"
 glob = "0.3"
+human-size = "0.4"
+prettytable-rs = "0.8"
 regex = "1.3.7"
 commandspec = "0.12.2"
 chrono = { version = "0.4.7", features = ["serde"] }
 memmap = "0.7.0"
-bellperson = { version = "0.13", default-features = false }
+bellperson = "0.9.1"
+paired = "0.20.0"
+fil-sapling-crypto = "0.6.0"
 rand = "0.7"
+storage-proofs = { path = "../storage-proofs"}
+filecoin-proofs = { path = "../filecoin-proofs"}
 tempfile = "3.0.8"
 cpu-time = "1.0.0"
 git2 = "0.13.6"
-heim = { git = "https://github.com/heim-rs/heim", rev = "e22e235", features = ["host", "memory", "cpu"] }
+heim = { version = "0.1.0-beta.1", features = ["host", "memory", "cpu"] }
 async-std = "1.6"
+raw-cpuid = "7.0.3"
 blake2s_simd = "0.5.6"
 fil_logger = "0.1"
 log = "0.4.8"
-uom = "0.30"
-merkletree = "0.21.0"
+uom = "0.28"
+merkletree = "0.20.0"
 bincode = "1.1.2"
 anyhow = "1.0.23"
-ff = { version = "0.2.3", package = "fff" }
+ff = { version = "0.2.0", package = "fff" }
 rand_xorshift = "0.2.0"
 bytefmt = "0.1.7"
 rayon = "1.3.0"
-flexi_logger = "0.16.1"
+flexi_logger = "0.14.7"
 typenum = "1.11.2"
-generic-array = "0.14.4"
-byte-unit = "4.0.9"
-fdlimit = "0.2.0"
-dialoguer = "0.8.0"
-structopt = "0.3.12"
-humansize = "1.1.0"
+generic-array = "0.13.2"
 
 [features]
-default = ["gpu", "measurements", "pairing"]
-gpu = [
-    "storage-proofs-core/gpu",
-    "storage-proofs-porep/gpu",
-    "storage-proofs-post/gpu",
-    "filecoin-proofs/gpu",
-    "bellperson/gpu",
-    "filecoin-hashers/gpu",
-]
-measurements = ["storage-proofs-core/measurements"]
-profile = ["storage-proofs-core/profile", "measurements"]
-pairing = [
-    "storage-proofs-core/pairing",
-    "storage-proofs-porep/pairing",
-    "storage-proofs-post/pairing",
-    "filecoin-proofs/pairing",
-    "bellperson/pairing",
-    "filecoin-hashers/pairing",
-]
-blst = [
-    "storage-proofs-core/blst",
-    "storage-proofs-porep/blst",
-    "storage-proofs-post/blst",
-    "filecoin-proofs/blst",
-    "bellperson/blst",
-    "filecoin-hashers/blst",
-]
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-raw-cpuid = "8.1.2"
+default = ["gpu", "measurements"]
+gpu = ["storage-proofs/gpu", "filecoin-proofs/gpu", "bellperson/gpu", "fil-sapling-crypto/gpu"]
+measurements = ["storage-proofs/measurements"]
+profile = ["storage-proofs/profile", "measurements"]
