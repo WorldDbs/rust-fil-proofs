@@ -1,45 +1,43 @@
 use std::fs::{self, metadata, File, OpenOptions};
-use std::io::Write;
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
-use bellperson::bls::Fr;
 use bincode::{deserialize, serialize};
-use filecoin_hashers::{Domain, Hasher};
 use log::{info, trace};
 use memmap::MmapOptions;
 use merkletree::store::{DiskStore, Store, StoreConfig};
-use storage_proofs_core::{
-    cache_key::CacheKey,
-    compound_proof::{self, CompoundProof},
-    drgraph::Graph,
-    measurements::{measure_op, Operation},
-    merkle::{create_base_merkle_tree, BinaryMerkleTree, MerkleTreeTrait},
-    multi_proof::MultiProof,
-    proof::ProofScheme,
-    sector::SectorId,
-    util::default_rows_to_discard,
-    Data,
-};
-use storage_proofs_porep::stacked::{
+use paired::bls12_381::Fr;
+use storage_proofs::cache_key::CacheKey;
+use storage_proofs::compound_proof::{self, CompoundProof};
+use storage_proofs::drgraph::Graph;
+use storage_proofs::hasher::{Domain, Hasher};
+use storage_proofs::measurements::{measure_op, Operation::CommD};
+use storage_proofs::merkle::{create_base_merkle_tree, BinaryMerkleTree, MerkleTreeTrait};
+use storage_proofs::multi_proof::MultiProof;
+use storage_proofs::porep::stacked::{
     self, generate_replica_id, ChallengeRequirements, StackedCompound, StackedDrg, Tau,
     TemporaryAux, TemporaryAuxCache,
 };
+use storage_proofs::proof::ProofScheme;
+use storage_proofs::sector::SectorId;
+use storage_proofs::util::default_rows_to_discard;
 
-use crate::{
-    api::{as_safe_commitment, commitment_from_fr, get_base_tree_leafs, get_base_tree_size},
-    caches::{get_stacked_params, get_stacked_verifying_key},
-    constants::{
-        DefaultBinaryTree, DefaultPieceDomain, DefaultPieceHasher, POREP_MINIMUM_CHALLENGES,
-        SINGLE_PARTITION_PROOF_LEN,
-    },
-    parameters::setup_params,
-    pieces::{self, verify_pieces},
-    types::{
-        Commitment, PaddedBytesAmount, PieceInfo, PoRepConfig, PoRepProofPartitions, ProverId,
-        SealCommitOutput, SealCommitPhase1Output, SealPreCommitOutput, SealPreCommitPhase1Output,
-        SectorSize, Ticket, BINARY_ARITY,
-    },
+use crate::api::util::{
+    as_safe_commitment, commitment_from_fr, get_base_tree_leafs, get_base_tree_size,
+};
+use crate::caches::{get_stacked_params, get_stacked_verifying_key};
+use crate::constants::{
+    DefaultBinaryTree, DefaultPieceDomain, DefaultPieceHasher, POREP_MINIMUM_CHALLENGES,
+    SINGLE_PARTITION_PROOF_LEN,
+};
+use crate::parameters::setup_params;
+pub use crate::pieces;
+pub use crate::pieces::verify_pieces;
+use crate::types::{
+    Commitment, PaddedBytesAmount, PieceInfo, PoRepConfig, PoRepProofPartitions, ProverId,
+    SealCommitOutput, SealCommitPhase1Output, SealPreCommitOutput, SealPreCommitPhase1Output,
+    SectorSize, Ticket, BINARY_ARITY,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -58,7 +56,7 @@ where
     S: AsRef<Path>,
     T: AsRef<Path>,
 {
-    info!("seal_pre_commit_phase1:start: {:?}", sector_id);
+    info!("seal_pre_commit_phase1:start");
 
     // Sanity check all input path types.
     ensure!(
@@ -110,19 +108,18 @@ where
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
     };
 
     let compound_public_params = <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-        StackedDrg<'_, Tree, DefaultPieceHasher>,
+        StackedDrg<Tree, DefaultPieceHasher>,
         _,
     >>::setup(&compound_setup_params)?;
 
     info!("building merkle tree for the original data");
-    let (config, comm_d) = measure_op(Operation::CommD, || -> Result<_> {
+    let (config, comm_d) = measure_op(CommD, || -> Result<_> {
         let base_tree_size = get_base_tree_size::<DefaultBinaryTree>(porep_config.sector_size)?;
         let base_tree_leafs = get_base_tree_leafs::<DefaultBinaryTree>(base_tree_size)?;
         ensure!(
@@ -137,12 +134,13 @@ where
             base_tree_leafs,
         );
 
+        // MT for original data is always named tree-d, and it will be
+        // referenced later in the process as such.
         let mut config = StoreConfig::new(
             cache_path.as_ref(),
             CacheKey::CommDTree.to_string(),
             default_rows_to_discard(base_tree_leafs, BINARY_ARITY),
         );
-
         let data_tree = create_base_merkle_tree::<BinaryMerkleTree<DefaultPieceHasher>>(
             Some(config.clone()),
             base_tree_leafs,
@@ -186,7 +184,7 @@ where
         comm_d,
     };
 
-    info!("seal_pre_commit_phase1:finish: {:?}", sector_id);
+    info!("seal_pre_commit_phase1:finish");
     Ok(out)
 }
 
@@ -241,7 +239,7 @@ where
             )
         })?
     };
-    let data: Data<'_> = (data, PathBuf::from(replica_path.as_ref())).into();
+    let data: storage_proofs::Data<'_> = (data, PathBuf::from(replica_path.as_ref())).into();
 
     // Load data tree from disk
     let data_tree = {
@@ -269,14 +267,13 @@ where
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
     };
 
     let compound_public_params = <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-        StackedDrg<'_, Tree, DefaultPieceHasher>,
+        StackedDrg<Tree, DefaultPieceHasher>,
         _,
     >>::setup(&compound_setup_params)?;
 
@@ -326,7 +323,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
     pre_commit: SealPreCommitOutput,
     piece_infos: &[PieceInfo],
 ) -> Result<SealCommitPhase1Output<Tree>> {
-    info!("seal_commit_phase1:start: {:?}", sector_id);
+    info!("seal_commit_phase1:start");
 
     // Sanity check all input path types.
     ensure!(
@@ -349,7 +346,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
 
     let p_aux = {
         let p_aux_path = cache_path.as_ref().join(CacheKey::PAux.to_string());
-        let p_aux_bytes = fs::read(&p_aux_path)
+        let p_aux_bytes = std::fs::read(&p_aux_path)
             .with_context(|| format!("could not read file p_aux={:?}", p_aux_path))?;
 
         deserialize(&p_aux_bytes)
@@ -357,7 +354,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
 
     let t_aux = {
         let t_aux_path = cache_path.as_ref().join(CacheKey::TAux.to_string());
-        let t_aux_bytes = fs::read(&t_aux_path)
+        let t_aux_bytes = std::fs::read(&t_aux_path)
             .with_context(|| format!("could not read file t_aux={:?}", t_aux_path))?;
 
         let mut res: TemporaryAux<_, _> = deserialize(&t_aux_bytes)?;
@@ -404,14 +401,13 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
     };
 
     let compound_public_params = <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-        StackedDrg<'_, Tree, DefaultPieceHasher>,
+        StackedDrg<Tree, DefaultPieceHasher>,
         _,
     >>::setup(&compound_setup_params)?;
 
@@ -438,7 +434,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
         ticket,
     };
 
-    info!("seal_commit_phase1:finish: {:?}", sector_id);
+    info!("seal_commit_phase1:finish");
     Ok(out)
 }
 
@@ -449,7 +445,7 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
     prover_id: ProverId,
     sector_id: SectorId,
 ) -> Result<SealCommitOutput> {
-    info!("seal_commit_phase2:start: {:?}", sector_id);
+    info!("seal_commit_phase2:start");
 
     let SealCommitPhase1Output {
         vanilla_proofs,
@@ -488,14 +484,13 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
     };
 
     let compound_public_params = <StackedCompound<Tree, DefaultPieceHasher> as CompoundProof<
-        StackedDrg<'_, Tree, DefaultPieceHasher>,
+        StackedDrg<Tree, DefaultPieceHasher>,
         _,
     >>::setup(&compound_setup_params)?;
 
@@ -509,7 +504,7 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
     )?;
     info!("snark_proof:finish");
 
-    let proof = MultiProof::new(groth_proofs, &groth_params.pvk);
+    let proof = MultiProof::new(groth_proofs, &groth_params.vk);
 
     let mut buf = Vec::with_capacity(
         SINGLE_PARTITION_PROOF_LEN * usize::from(PoRepProofPartitions::from(porep_config)),
@@ -533,7 +528,7 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
 
     let out = SealCommitOutput { proof: buf };
 
-    info!("seal_commit_phase2:finish: {:?}", sector_id);
+    info!("seal_commit_phase2:finish");
     Ok(out)
 }
 
@@ -575,10 +570,11 @@ pub fn verify_seal<Tree: 'static + MerkleTreeTrait>(
     seed: Ticket,
     proof_vec: &[u8],
 ) -> Result<bool> {
-    info!("verify_seal:start: {:?}", sector_id);
+    info!("verify_seal:start");
     ensure!(comm_d_in != [0; 32], "Invalid all zero commitment (comm_d)");
     ensure!(comm_r_in != [0; 32], "Invalid all zero commitment (comm_r)");
 
+    let sector_bytes = PaddedBytesAmount::from(porep_config);
     let comm_r: <Tree::Hasher as Hasher>::Domain = as_safe_commitment(&comm_r_in, "comm_r")?;
     let comm_d: DefaultPieceDomain = as_safe_commitment(&comm_d_in, "comm_d")?;
 
@@ -595,7 +591,6 @@ pub fn verify_seal<Tree: 'static + MerkleTreeTrait>(
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
@@ -614,36 +609,34 @@ pub fn verify_seal<Tree: 'static + MerkleTreeTrait>(
             k: None,
         };
 
-    let result = {
-        let sector_bytes = PaddedBytesAmount::from(porep_config);
-        let verifying_key = get_stacked_verifying_key::<Tree>(porep_config)?;
+    let verifying_key = get_stacked_verifying_key::<Tree>(porep_config)?;
 
-        info!(
-            "got verifying key ({}) while verifying seal",
-            u64::from(sector_bytes)
-        );
+    info!(
+        "got verifying key ({}) while verifying seal",
+        u64::from(sector_bytes)
+    );
 
-        let proof = MultiProof::new_from_reader(
-            Some(usize::from(PoRepProofPartitions::from(porep_config))),
-            proof_vec,
-            &verifying_key,
-        )?;
+    let proof = MultiProof::new_from_reader(
+        Some(usize::from(PoRepProofPartitions::from(porep_config))),
+        proof_vec,
+        &verifying_key,
+    )?;
 
-        StackedCompound::verify(
-            &compound_public_params,
-            &public_inputs,
-            &proof,
-            &ChallengeRequirements {
-                minimum_challenges: *POREP_MINIMUM_CHALLENGES
-                    .read()
-                    .expect("POREP_MINIMUM_CHALLENGES poisoned")
-                    .get(&u64::from(SectorSize::from(porep_config)))
-                    .expect("unknown sector size") as usize,
-            },
-        )
-    };
+    let result = StackedCompound::verify(
+        &compound_public_params,
+        &public_inputs,
+        &proof,
+        &ChallengeRequirements {
+            minimum_challenges: *POREP_MINIMUM_CHALLENGES
+                .read()
+                .unwrap()
+                .get(&u64::from(SectorSize::from(porep_config)))
+                .expect("unknown sector size") as usize,
+        },
+    )
+    .map_err(Into::into);
 
-    info!("verify_seal:finish: {:?}", sector_id);
+    info!("verify_seal:finish");
     result
 }
 
@@ -707,7 +700,6 @@ pub fn verify_batch_seal<Tree: 'static + MerkleTreeTrait>(
             PaddedBytesAmount::from(porep_config),
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
-            porep_config.api_version,
         )?,
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
@@ -756,7 +748,7 @@ pub fn verify_batch_seal<Tree: 'static + MerkleTreeTrait>(
         &ChallengeRequirements {
             minimum_challenges: *POREP_MINIMUM_CHALLENGES
                 .read()
-                .expect("POREP_MINIMUM_CHALLENGES poisoned")
+                .unwrap()
                 .get(&u64::from(SectorSize::from(porep_config)))
                 .expect("unknown sector size") as usize,
         },
@@ -765,4 +757,53 @@ pub fn verify_batch_seal<Tree: 'static + MerkleTreeTrait>(
 
     info!("verify_batch_seal:finish");
     result
+}
+
+pub fn fauxrep<R: AsRef<Path>, S: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
+    porep_config: PoRepConfig,
+    cache_path: R,
+    out_path: S,
+) -> Result<Commitment> {
+    let mut rng = rand::thread_rng();
+    fauxrep_aux::<_, R, S, Tree>(&mut rng, porep_config, cache_path, out_path)
+}
+
+pub fn fauxrep_aux<
+    Rng: rand::Rng,
+    R: AsRef<Path>,
+    S: AsRef<Path>,
+    Tree: 'static + MerkleTreeTrait,
+>(
+    mut rng: &mut Rng,
+    porep_config: PoRepConfig,
+    cache_path: R,
+    out_path: S,
+) -> Result<Commitment> {
+    let sector_bytes = PaddedBytesAmount::from(porep_config).0;
+
+    {
+        // Create a sector full of null bytes at `out_path`.
+        let file = File::create(&out_path)?;
+        file.set_len(sector_bytes)?;
+    }
+
+    let fake_comm_c = <Tree::Hasher as Hasher>::Domain::random(&mut rng);
+    let (comm_r, p_aux) = StackedDrg::<Tree, DefaultPieceHasher>::fake_replicate_phase2(
+        fake_comm_c,
+        out_path,
+        &cache_path,
+        sector_bytes as usize,
+    )?;
+
+    let p_aux_path = cache_path.as_ref().join(CacheKey::PAux.to_string());
+    let mut f_p_aux = File::create(&p_aux_path)
+        .with_context(|| format!("could not create file p_aux={:?}", p_aux_path))?;
+    let p_aux_bytes = serialize(&p_aux)?;
+    f_p_aux
+        .write_all(&p_aux_bytes)
+        .with_context(|| format!("could not write to file p_aux={:?}", p_aux_path))?;
+
+    let mut commitment = [0u8; 32];
+    commitment[..].copy_from_slice(&comm_r.into_bytes()[..]);
+    Ok(commitment)
 }
