@@ -1,12 +1,10 @@
 use anyhow::{ensure, Result};
-use storage_proofs_core::{api_version::ApiVersion, proof::ProofScheme};
-use storage_proofs_porep::stacked::{self, LayerChallenges, StackedDrg};
-use storage_proofs_post::fallback::{self, FallbackPoSt};
+use storage_proofs::porep::stacked::{self, LayerChallenges, StackedDrg};
+use storage_proofs::post::fallback;
+use storage_proofs::proof::ProofScheme;
 
-use crate::{
-    constants::{DefaultPieceHasher, DRG_DEGREE, EXP_DEGREE, LAYERS, POREP_MINIMUM_CHALLENGES},
-    types::{MerkleTreeTrait, PaddedBytesAmount, PoStConfig},
-};
+use crate::constants::*;
+use crate::types::{MerkleTreeTrait, PaddedBytesAmount, PoStConfig};
 
 type WinningPostSetupParams = fallback::SetupParams;
 pub type WinningPostPublicParams = fallback::PublicParams;
@@ -18,20 +16,18 @@ pub fn public_params<Tree: 'static + MerkleTreeTrait>(
     sector_bytes: PaddedBytesAmount,
     partitions: usize,
     porep_id: [u8; 32],
-    api_version: ApiVersion,
 ) -> Result<stacked::PublicParams<Tree>> {
     StackedDrg::<Tree, DefaultPieceHasher>::setup(&setup_params(
         sector_bytes,
         partitions,
         porep_id,
-        api_version,
     )?)
 }
 
 pub fn winning_post_public_params<Tree: 'static + MerkleTreeTrait>(
     post_config: &PoStConfig,
 ) -> Result<WinningPostPublicParams> {
-    FallbackPoSt::<Tree>::setup(&winning_post_setup_params(&post_config)?)
+    fallback::FallbackPoSt::<Tree>::setup(&winning_post_setup_params(&post_config)?)
 }
 
 pub fn winning_post_setup_params(post_config: &PoStConfig) -> Result<WinningPostSetupParams> {
@@ -55,14 +51,13 @@ pub fn winning_post_setup_params(post_config: &PoStConfig) -> Result<WinningPost
         sector_size: post_config.padded_sector_size().into(),
         challenge_count: param_challenge_count,
         sector_count: param_sector_count,
-        api_version: post_config.api_version,
     })
 }
 
 pub fn window_post_public_params<Tree: 'static + MerkleTreeTrait>(
     post_config: &PoStConfig,
 ) -> Result<WindowPostPublicParams> {
-    FallbackPoSt::<Tree>::setup(&window_post_setup_params(&post_config))
+    fallback::FallbackPoSt::<Tree>::setup(&window_post_setup_params(&post_config))
 }
 
 pub fn window_post_setup_params(post_config: &PoStConfig) -> WindowPostSetupParams {
@@ -70,7 +65,6 @@ pub fn window_post_setup_params(post_config: &PoStConfig) -> WindowPostSetupPara
         sector_size: post_config.padded_sector_size().into(),
         challenge_count: post_config.challenge_count,
         sector_count: post_config.sector_count,
-        api_version: post_config.api_version,
     }
 }
 
@@ -78,18 +72,17 @@ pub fn setup_params(
     sector_bytes: PaddedBytesAmount,
     partitions: usize,
     porep_id: [u8; 32],
-    api_version: ApiVersion,
 ) -> Result<stacked::SetupParams> {
     let layer_challenges = select_challenges(
         partitions,
         *POREP_MINIMUM_CHALLENGES
             .read()
-            .expect("POREP_MINIMUM_CHALLENGES poisoned")
+            .unwrap()
             .get(&u64::from(sector_bytes))
             .expect("unknown sector size") as usize,
         *LAYERS
             .read()
-            .expect("LAYERS poisoned")
+            .unwrap()
             .get(&u64::from(sector_bytes))
             .expect("unknown sector size"),
     )?;
@@ -111,7 +104,6 @@ pub fn setup_params(
         expansion_degree,
         porep_id,
         layer_challenges,
-        api_version,
     })
 }
 
@@ -133,17 +125,17 @@ fn select_challenges(
 mod tests {
     use super::*;
 
-    use crate::{DefaultOctLCTree, PoRepProofPartitions, PoStType};
+    use crate::types::PoStType;
 
     #[test]
     fn partition_layer_challenges_test() {
         let f = |partitions| {
             select_challenges(partitions, 12, 11)
-                .expect("never fails")
+                .unwrap()
                 .challenges_count_all()
         };
         // Update to ensure all supported PoRepProofPartitions options are represented here.
-        assert_eq!(6, f(usize::from(PoRepProofPartitions(2))));
+        assert_eq!(6, f(usize::from(crate::PoRepProofPartitions(2))));
 
         assert_eq!(12, f(1));
         assert_eq!(6, f(2));
@@ -158,11 +150,9 @@ mod tests {
             challenge_count: 66,
             sector_count: 1,
             sector_size: 2048u64.into(),
-            api_version: ApiVersion::V1_0_0,
         };
 
-        let params =
-            winning_post_public_params::<DefaultOctLCTree>(&config).expect("failed to get params");
+        let params = winning_post_public_params::<DefaultOctLCTree>(&config).unwrap();
         assert_eq!(params.sector_count, 66);
         assert_eq!(params.challenge_count, 1);
         assert_eq!(params.sector_size, 2048);
