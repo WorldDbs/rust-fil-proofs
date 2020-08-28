@@ -1,5 +1,7 @@
-use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter};
+use std::fmt::{self, Debug, Formatter};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::mem::size_of;
 use std::path::Path;
 use std::process::Command;
 use std::str::{self, FromStr};
@@ -7,8 +9,9 @@ use std::sync::mpsc::{channel, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use bellperson::groth16;
+use byteorder::{BigEndian, ReadBytesExt};
 use clap::{App, AppSettings, Arg, ArgGroup, SubCommand};
-
 use filecoin_proofs::constants::*;
 use filecoin_proofs::parameters::{
     setup_params, window_post_public_params, winning_post_public_params,
@@ -17,7 +20,9 @@ use filecoin_proofs::types::{
     PaddedBytesAmount, PoRepConfig, PoRepProofPartitions, PoStConfig, PoStType, SectorSize,
 };
 use filecoin_proofs::with_shape;
-use log::{error, info};
+use groupy::{CurveAffine, EncodedPoint};
+use log::{error, info, warn};
+use paired::bls12_381::{Bls12, G1Affine, G1Uncompressed, G2Affine, G2Uncompressed};
 use phase2::small::{read_small_params_from_large_file, MPCSmall, Streamer};
 use phase2::MPCParameters;
 use rand::rngs::OsRng;
@@ -27,10 +32,24 @@ use simplelog::{self, CombinedLogger, LevelFilter, TermLogger, TerminalMode, Wri
 use storage_proofs::compound_proof::{self, CompoundProof};
 use storage_proofs::hasher::Sha256Hasher;
 use storage_proofs::merkle::MerkleTreeTrait;
-use storage_proofs::porep::stacked::{StackedCircuit, StackedCompound, StackedDrg};
-use storage_proofs::post::fallback::{FallbackPoSt, FallbackPoStCircuit, FallbackPoStCompound};
+use storage_proofs::parameter_cache::{
+    self, metadata_id, parameter_id, verifying_key_id, CacheableParameters,
+};
+use storage_proofs::porep::stacked::{
+    PublicParams as PoRepPublicParams, StackedCircuit, StackedCompound, StackedDrg,
+};
+use storage_proofs::post::fallback::{
+    FallbackPoSt, FallbackPoStCircuit, FallbackPoStCompound, PublicParams as PoStPublicParams,
+};
 
 const CHUNK_SIZE: usize = 10_000;
+
+// Non-raw sizes.
+const G1_SIZE: u64 = size_of::<G1Uncompressed>() as u64; // 96
+const G2_SIZE: u64 = size_of::<G2Uncompressed>() as u64; // 192
+const PUBKEY_SIZE: u64 = 3 * G1_SIZE + G2_SIZE + 64; // 544
+
+const VEC_LEN_SIZE: u64 = size_of::<u32>() as u64; // 4
 
 fn get_head_commit() -> String {
     let output = Command::new("git")
@@ -44,7 +63,7 @@ fn get_head_commit() -> String {
         .to_lowercase()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Proof {
     Sdr,
     Winning,
@@ -69,7 +88,7 @@ impl Proof {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Hasher {
     Poseidon,
     // ShaPedersen,
@@ -95,7 +114,7 @@ impl Hasher {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 enum Sector {
     SectorSize2KiB,
@@ -157,7 +176,7 @@ impl Sector {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ParamSize {
     Large,
     Small,
@@ -209,10 +228,13 @@ fn params_filename(
 }
 
 // Parses a phase2 parameters filename into the tuple:
-// (proof, hasher, sector-size, head, param-number, param-size).
+// (proof, hasher, sector-size, head, param-number, param-size, is-raw).
 fn parse_params_filename(path: &str) -> (Proof, Hasher, Sector, String, usize, ParamSize, bool) {
     // Remove directories from the path.
-    let filename = path.rsplitn(2, '/').next().unwrap();
+    let filename = path
+        .rsplitn(2, '/')
+        .next()
+        .expect("parse_params_filename rsplitn failed");
     let split: Vec<&str> = filename.split('_').collect();
 
     let proof = match split[0] {
@@ -255,6 +277,10 @@ fn parse_params_filename(path: &str) -> (Proof, Hasher, Sector, String, usize, P
 
     let raw_fmt = split.get(6) == Some(&"raw");
 
+    if param_size.is_large() && raw_fmt {
+        unimplemented!("large-raw params are not currently supported: {}", path);
+    }
+
     (
         proof,
         hasher,
@@ -266,10 +292,12 @@ fn parse_params_filename(path: &str) -> (Proof, Hasher, Sector, String, usize, P
     )
 }
 
-fn blank_sdr_poseidon_circuit<Tree: MerkleTreeTrait>(
-    sector_size: u64,
-) -> StackedCircuit<'static, Tree, Sha256Hasher> {
-    let n_partitions = *POREP_PARTITIONS.read().unwrap().get(&sector_size).unwrap();
+fn blank_sdr_poseidon_params<Tree: MerkleTreeTrait>(sector_size: u64) -> PoRepPublicParams<Tree> {
+    let n_partitions = *POREP_PARTITIONS
+        .read()
+        .expect("porep partition read error")
+        .get(&sector_size)
+        .expect("porep partition get error");
 
     let porep_config = PoRepConfig {
         sector_size: SectorSize(sector_size),
@@ -283,7 +311,7 @@ fn blank_sdr_poseidon_circuit<Tree: MerkleTreeTrait>(
             usize::from(PoRepProofPartitions::from(porep_config)),
             porep_config.porep_id,
         )
-        .unwrap(),
+        .expect("failed to setup params"),
         partitions: Some(usize::from(PoRepProofPartitions::from(porep_config))),
         priority: false,
     };
@@ -292,12 +320,8 @@ fn blank_sdr_poseidon_circuit<Tree: MerkleTreeTrait>(
         StackedDrg<Tree, Sha256Hasher>,
         _,
     >>::setup(&setup_params)
-    .unwrap();
-
-    <StackedCompound<Tree, Sha256Hasher> as CompoundProof<
-        StackedDrg<Tree, Sha256Hasher>,
-        _,
-    >>::blank_circuit(&public_params.vanilla_params)
+    .expect("public param setup failed");
+    public_params.vanilla_params
 }
 
 /*
@@ -335,9 +359,9 @@ fn blank_porep_sha_pedersen_circuit(
 }
 */
 
-fn blank_winning_post_poseidon_circuit<Tree: 'static + MerkleTreeTrait>(
+fn blank_winning_post_poseidon_params<Tree: 'static + MerkleTreeTrait>(
     sector_size: u64,
-) -> FallbackPoStCircuit<Tree> {
+) -> PoStPublicParams {
     let post_config = PoStConfig {
         sector_size: SectorSize(sector_size),
         challenge_count: WINNING_POST_CHALLENGE_COUNT,
@@ -346,35 +370,25 @@ fn blank_winning_post_poseidon_circuit<Tree: 'static + MerkleTreeTrait>(
         priority: false,
     };
 
-    let public_params = winning_post_public_params::<Tree>(&post_config).unwrap();
-
-    <FallbackPoStCompound<Tree> as CompoundProof<
-        FallbackPoSt<Tree>,
-        FallbackPoStCircuit<Tree>,
-    >>::blank_circuit(&public_params)
+    winning_post_public_params::<Tree>(&post_config).expect("winning post public params failed")
 }
 
-fn blank_window_post_poseidon_circuit<Tree: 'static + MerkleTreeTrait>(
+fn blank_window_post_poseidon_params<Tree: 'static + MerkleTreeTrait>(
     sector_size: u64,
-) -> FallbackPoStCircuit<Tree> {
+) -> PoStPublicParams {
     let post_config = PoStConfig {
         sector_size: SectorSize(sector_size),
         challenge_count: WINDOW_POST_CHALLENGE_COUNT,
         sector_count: *WINDOW_POST_SECTOR_COUNT
             .read()
-            .unwrap()
+            .expect("post config sector count read failure")
             .get(&sector_size)
-            .unwrap(),
+            .expect("post config sector count get failure"),
         typ: PoStType::Window,
         priority: false,
     };
 
-    let public_params = window_post_public_params::<Tree>(&post_config).unwrap();
-
-    <FallbackPoStCompound<Tree> as CompoundProof<
-        FallbackPoSt<Tree>,
-        FallbackPoStCircuit<Tree>,
-    >>::blank_circuit(&public_params)
+    window_post_public_params::<Tree>(&post_config).expect("window post public params failed")
 }
 
 /// Creates the first phase2 parameters for a circuit and writes them to a file.
@@ -400,28 +414,40 @@ fn create_initial_params<Tree: 'static + MerkleTreeTrait>(
     let params = match (proof, hasher) {
         (Proof::Sdr, Hasher::Poseidon) => {
             let start = Instant::now();
-            let circuit = blank_sdr_poseidon_circuit::<Tree>(sector_size.as_u64());
+            let public_params = blank_sdr_poseidon_params(sector_size.as_u64());
+            let circuit = <StackedCompound<Tree, Sha256Hasher> as CompoundProof<
+                StackedDrg<Tree, Sha256Hasher>,
+                _,
+            >>::blank_circuit(&public_params);
             dt_create_circuit = start.elapsed().as_secs();
             let start = Instant::now();
-            let params = MPCParameters::new(circuit).unwrap();
+            let params = MPCParameters::new(circuit).expect("mpc params new failure");
             dt_create_params = start.elapsed().as_secs();
             params
         }
         (Proof::Winning, Hasher::Poseidon) => {
             let start = Instant::now();
-            let circuit = blank_winning_post_poseidon_circuit::<Tree>(sector_size.as_u64());
+            let public_params = blank_winning_post_poseidon_params::<Tree>(sector_size.as_u64());
+            let circuit = <FallbackPoStCompound<Tree> as CompoundProof<
+                FallbackPoSt<Tree>,
+                FallbackPoStCircuit<Tree>,
+            >>::blank_circuit(&public_params);
             dt_create_circuit = start.elapsed().as_secs();
             let start = Instant::now();
-            let params = MPCParameters::new(circuit).unwrap();
+            let params = MPCParameters::new(circuit).expect("mpc params new failure");
             dt_create_params = start.elapsed().as_secs();
             params
         }
         (Proof::Window, Hasher::Poseidon) => {
             let start = Instant::now();
-            let circuit = blank_window_post_poseidon_circuit::<Tree>(sector_size.as_u64());
+            let public_params = blank_window_post_poseidon_params::<Tree>(sector_size.as_u64());
+            let circuit = <FallbackPoStCompound<Tree> as CompoundProof<
+                FallbackPoSt<Tree>,
+                FallbackPoStCircuit<Tree>,
+            >>::blank_circuit(&public_params);
             dt_create_circuit = start.elapsed().as_secs();
             let start = Instant::now();
-            let params = MPCParameters::new(circuit).unwrap();
+            let params = MPCParameters::new(circuit).expect("mpc params new failure");
             dt_create_params = start.elapsed().as_secs();
             params
         }
@@ -442,16 +468,19 @@ fn create_initial_params<Tree: 'static + MerkleTreeTrait>(
         ParamSize::Large,
         false,
     );
-    let small_path = params_filename(proof, hasher, sector_size, &head, 0, ParamSize::Small, true);
 
     {
         info!("writing large initial params to file: {}", large_path);
-        let file = File::create(&large_path).unwrap();
+        let file = File::create(&large_path).expect("param file create failure");
         let mut writer = BufWriter::with_capacity(1024 * 1024, file);
-        params.write(&mut writer).unwrap();
+        params.write(&mut writer).expect("param file write failure");
         info!("finished writing large params to file");
     }
 
+    // TODO: add conversion from large to small params to phase2 crate, then write initial params as
+    // small-raw.
+    /*
+    let small_path = params_filename(proof, hasher, sector_size, &head, 0, ParamSize::Small, true);
     {
         info!("writing small initial params to file: {}", small_path);
         let file = File::create(&small_path).unwrap();
@@ -459,6 +488,7 @@ fn create_initial_params<Tree: 'static + MerkleTreeTrait>(
         params.write_small(&mut writer).unwrap();
         info!("finished writing small params to file");
     }
+    */
 
     info!(
         "successfully created and wrote initial params for circuit: {}-{}-{}-{}, dt_total={}s",
@@ -470,9 +500,8 @@ fn create_initial_params<Tree: 'static + MerkleTreeTrait>(
     );
 }
 
-// Encodes a contribution into a hex string (lowercase, no leading "0x").
-fn hex_string(contrib: &[u8; 64]) -> String {
-    hex::encode(&contrib[..])
+fn hex_string(contrib: &[u8]) -> String {
+    hex::encode(contrib)
 }
 
 fn get_mixed_entropy() -> [u8; 32] {
@@ -485,7 +514,7 @@ fn get_mixed_entropy() -> [u8; 32] {
     let user_input = Password::with_theme(&ColorfulTheme::default())
         .with_prompt("Please randomly press your keyboard (press Return/Enter when finished)")
         .interact()
-        .unwrap();
+        .expect("entropy read failure");
 
     let mut blake2b = blake2b_simd::Params::default();
     blake2b.hash_length(32);
@@ -499,9 +528,9 @@ fn get_mixed_entropy() -> [u8; 32] {
     seed
 }
 
-/// Contributes entropy to the current phase2 parameters for a circuit, then writes the updated
-/// parameters to a new file.
-fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
+/// Contributes entropy to the current phase2 parameters for a circuit, then writes the new params
+/// to a small-raw file.
+fn contribute_to_params(path_before: &str, seed: Option<[u8; 32]>) {
     let (proof, hasher, sector_size, head, prev_param_number, param_size, read_raw) =
         parse_params_filename(path_before);
 
@@ -518,11 +547,17 @@ fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
         param_number
     );
 
-    // Get OS entropy prior to deserialization the previous participant's params.
-    let seed = get_mixed_entropy();
+    // Get OS entropy prior to deserializing the previous params.
+    let seed = if let Some(seed) = seed {
+        warn!("using `seed` argument as entropy: {}", hex_string(&seed));
+        seed
+    } else {
+        info!("using mixed entropy");
+        get_mixed_entropy()
+    };
     let mut rng = ChaChaRng::from_seed(seed);
 
-    // Default to small params for first participant.
+    // Write small-raw contributions.
     let path_after = params_filename(
         proof,
         hasher,
@@ -530,7 +565,7 @@ fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
         &head,
         param_number,
         ParamSize::Small,
-        write_raw,
+        true,
     );
 
     let start_total = Instant::now();
@@ -538,20 +573,15 @@ fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
     info!("making contribution");
     let start_contrib = Instant::now();
 
-    info!(
-        "making streamer from small 'before' params: {}",
-        path_before
-    );
-
     let mut streamer = if param_size.is_large() {
-        Streamer::new_from_large_file(path_before, read_raw, write_raw).unwrap_or_else(|e| {
+        Streamer::new_from_large_file(path_before, read_raw, true).unwrap_or_else(|e| {
             panic!(
                 "failed to make streamer from large `{}`: {}",
                 path_before, e
             );
         })
     } else {
-        Streamer::new(path_before, read_raw, write_raw).unwrap_or_else(|e| {
+        Streamer::new(path_before, read_raw, true).unwrap_or_else(|e| {
             panic!(
                 "failed to make streamer from small `{}`: {}",
                 path_before, e
@@ -559,7 +589,6 @@ fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
         })
     };
 
-    info!("writing small 'after' params to file: {}", path_after);
     let file_after = File::create(&path_after).unwrap_or_else(|e| {
         panic!(
             "failed to create 'after' params file `{}`: {}",
@@ -567,6 +596,7 @@ fn contribute_to_params_streaming(path_before: &str, write_raw: bool) {
         );
     });
 
+    info!("streaming 'after' params to file: {}", path_after);
     let contrib = streamer
         .contribute(&mut rng, file_after, CHUNK_SIZE)
         .unwrap_or_else(|e| panic!("failed to make streaming contribution: {}", e));
@@ -670,184 +700,16 @@ fn convert_small(path_before: &str) {
     );
 }
 
-/// Contributes entropy to the current phase2 parameters for a circuit, then writes the updated
-/// parameters to a new file.
-fn contribute_to_params(path_before: &str) {
-    let (proof, hasher, sector_size, head, prev_param_number, param_size, read_raw) =
-        parse_params_filename(path_before);
-
-    let param_number = prev_param_number + 1;
-
-    info!(
-        "contributing to params for circuit: {}-{}-{}-{}-{} {}->{}",
-        proof.pretty_print(),
-        hasher.pretty_print(),
-        sector_size.pretty_print(),
-        head,
-        param_size.pretty_print(),
-        prev_param_number,
-        param_number
-    );
-
-    if param_size.is_large() {
-        info!("large param file found, contributing as small");
-    }
-
-    // Get OS entropy prior to deserialization the previous participant's params.
-    let seed = get_mixed_entropy();
-    let mut rng = ChaChaRng::from_seed(seed);
-
-    /*
-    let path_after =
-        params_filename(proof, hasher, sector_size, &head, param_number, param_size);
-    */
-    // Default to small params for first participant.
-    let path_after = params_filename(
-        proof,
-        hasher,
-        sector_size,
-        &head,
-        param_number,
-        ParamSize::Small,
-        false,
-    );
-
-    let start_total = Instant::now();
-    let start_read = Instant::now();
-
-    let mut small_params = if param_size.is_large() {
-        info!("reading large 'before' params as small: {}", path_before);
-        read_small_params_from_large_file(&path_before).unwrap_or_else(|e| {
-            panic!(
-                "failed to read large param file `{}` as small: {}",
-                path_before, e
-            );
-        })
-    } else {
-        info!("reading small 'before' params as small: {}", path_before);
-        let file_before = File::open(path_before).unwrap();
-        let mut reader = BufReader::with_capacity(1024 * 1024, file_before);
-        MPCSmall::read(&mut reader, read_raw).unwrap_or_else(|e| {
-            panic!(
-                "failed to read small param file `{}` as small: {}",
-                path_before, e
-            );
-        })
-    };
-    info!(
-        "successfully read 'before' params, dt_read={}s",
-        start_read.elapsed().as_secs()
-    );
-
-    info!("making contribution");
-    let start_contrib = Instant::now();
-    let contrib = small_params.contribute(&mut rng);
-    let contrib_str = hex_string(&contrib);
-    info!(
-        "successfully made contribution: {}, dt_contribute={}s",
-        contrib_str,
-        start_contrib.elapsed().as_secs()
-    );
-
-    info!("writing small 'after' params to file: {}", path_after);
-    let file_after = File::create(&path_after).unwrap_or_else(|e| {
-        panic!(
-            "failed to create 'after' params file `{}`: {}",
-            path_after, e
-        );
-    });
-    let mut writer = BufWriter::with_capacity(1024 * 1024, file_after);
-    small_params.write(&mut writer).unwrap();
-
-    let contrib_path = format!("{}.contrib", path_after);
-    info!("writing contribution hash to file: {}", contrib_path);
-    fs::write(&contrib_path, contrib_str).unwrap_or_else(|e| {
-        panic!(
-            "failed to write contribution to file `{}`: {}",
-            contrib_path, e
-        );
-    });
-
-    info!(
-        "successfully made contribution, dt_total={}s",
-        start_total.elapsed().as_secs()
-    );
-
-    /*
-    info!("reading 'before' params from disk: {}", path_before);
-    let file_before = File::open(path_before).unwrap();
-    let mut reader = BufReader::with_capacity(1024 * 1024, file_before);
-    let start_read = Instant::now();
-
-    let contrib_str = if param_size.is_large() {
-        let mut large_params = MPCParameters::read(&mut reader, true).unwrap();
-        info!(
-            "successfully read 'before' params from disk, dt_read={}s",
-            start_read.elapsed().as_secs()
-        );
-
-        info!("making contribution");
-        let start_contrib = Instant::now();
-        let contrib = large_params.contribute(&mut rng);
-        let contrib_str = hex_string(&contrib);
-        info!(
-            "successfully made contribution: {}, dt_contribute={}s",
-            contrib_str,
-            start_contrib.elapsed().as_secs()
-        );
-
-        info!("writing 'after' params to file: {}", path_after);
-        let file_after = File::create(&path_after).unwrap();
-        let mut writer = BufWriter::with_capacity(1024 * 1024, file_after);
-        large_params.write(&mut writer).unwrap();
-
-        contrib_str
-    } else {
-        let mut small_params = MPCSmall::read(&mut reader).unwrap();
-        info!(
-            "successfully read 'before' params from disk, dt_read={}s",
-            start_read.elapsed().as_secs()
-        );
-
-        info!("making contribution");
-        let start_contrib = Instant::now();
-        let contrib = small_params.contribute(&mut rng);
-        let contrib_str = hex_string(&contrib);
-        info!(
-            "successfully made contribution: {}, dt_contribute={}s",
-            contrib_str,
-            start_contrib.elapsed().as_secs()
-        );
-
-        info!("writing 'after' params to file: {}", path_after);
-        let file_after = File::create(&path_after).unwrap();
-        let mut writer = BufWriter::with_capacity(1024 * 1024, file_after);
-        small_params.write(&mut writer).unwrap();
-
-        contrib_str
-    };
-
-    let contrib_path = format!("{}.contrib", path_after);
-    info!("writing contribution hash to file: {}", contrib_path);
-    fs::write(&contrib_path, contrib_str).unwrap_or_else(|e| {
-        panic!(
-            "failed to write contribution hash to file `{}`: {}",
-            contrib_path, e
-        );
-    });
-
-    info!(
-        "successfully made contribution, dt_total={}s",
-        start_total.elapsed().as_secs()
-    );
-    */
-}
-
-fn verify_contribution_small(
+/// If `raw_subgroup_checks` is true, then `verify_contribution` ensures that the G1 points of the 'after' contribution
+/// are in the correct subgroup. This is expensive, so the 'before' contribution is not checked. This assumes that all
+/// 'after' contributions will be separately verified, and ensures that the subgroup check will happen once (but no
+/// more). This means the very first 'before' params will not have the subgroup check. However, the verifier will have
+/// constructed these deterministically such that they are known to be in the subgroup.
+fn verify_contribution(
     path_before: &str,
     path_after: &str,
     participant_contrib: [u8; 64],
-    read_raw: bool,
+    raw_subgroup_checks: bool,
 ) {
     #[allow(clippy::large_enum_variant)]
     enum Message {
@@ -864,21 +726,6 @@ fn verify_contribution_small(
         hex_string(&participant_contrib)
     );
 
-    // Do these checks now to avoid panics in the reader threads.
-    assert!(
-        Path::new(&path_before).exists(),
-        "'before' params file not found: {}",
-        path_before
-    );
-    assert!(
-        Path::new(&path_after).exists(),
-        "'after' params file not found: {}",
-        path_after
-    );
-
-    let before_params_are_large = path_before.contains("large");
-    let after_params_are_large = path_after.contains("large");
-
     let (before_tx, before_rx) = channel::<Message>();
     let (after_tx, after_rx) = channel::<Message>();
 
@@ -887,50 +734,80 @@ fn verify_contribution_small(
 
     let before_thread: JoinHandle<()> = thread::spawn(move || {
         let start_read = Instant::now();
-        let read_res: io::Result<MPCSmall> = if before_params_are_large {
-            info!("reading large 'before' params as small: {}", path_before);
+        let is_large = path_before.contains("large");
+        let is_raw = path_before.ends_with("raw");
+
+        if !is_raw {
+            warn!("using non-raw 'before' params");
+        }
+
+        if is_raw {
+            warn!("skipping subgroup checks when deserializing small-raw 'before' params");
+        }
+
+        let read_res: io::Result<MPCSmall> = if is_large {
+            info!(
+                "reading large 'before' params as `MPCSmall`: {}",
+                path_before
+            );
             read_small_params_from_large_file(&path_before)
         } else {
-            info!("reading (small) 'before' params as small: {}", path_before);
-            File::open(path_before).and_then(|file| {
+            info!(
+                "reading small 'before' params as `MPCSmall`: {}",
+                path_before
+            );
+            File::open(&path_before).and_then(|file| {
                 let mut reader = BufReader::with_capacity(1024 * 1024, file);
-                MPCSmall::read(&mut reader, read_raw)
+                MPCSmall::read(&mut reader, is_raw, false)
             })
         };
+
         match read_res {
             Ok(params) => {
                 let dt_read = start_read.elapsed().as_secs();
                 info!("successfully read 'before' params, dt_read={}s", dt_read);
-                before_tx.send(Message::Done(params)).unwrap();
+                before_tx.send(Message::Done(params)).expect("send failure");
             }
             Err(e) => {
                 error!("failed to read 'before' params: {}", e);
-                before_tx.send(Message::Error(e)).unwrap();
+                before_tx.send(Message::Error(e)).expect("send failure");
             }
         };
     });
 
     let after_thread: JoinHandle<()> = thread::spawn(move || {
         let start_read = Instant::now();
-        let read_res: io::Result<MPCSmall> = if after_params_are_large {
-            info!("reading large 'after' params as small: {}", path_after);
+        let is_large = path_after.contains("large");
+        let is_raw = path_after.ends_with("raw");
+
+        if !is_raw {
+            warn!("using non-raw 'after' params");
+        }
+
+        if is_raw && !raw_subgroup_checks {
+            warn!("skipping subgroup checks when deserializing small-raw 'after' params")
+        }
+
+        let read_res: io::Result<MPCSmall> = if is_large {
+            info!("reading large 'after' params as `MPCSmall`: {}", path_after);
             read_small_params_from_large_file(&path_after)
         } else {
-            info!("reading (small) 'after' params as small: {}", path_after);
-            File::open(path_after).and_then(|file| {
+            info!("reading small 'after' params as `MPCSmall`: {}", path_after);
+            File::open(&path_after).and_then(|file| {
                 let mut reader = BufReader::with_capacity(1024 * 1024, file);
-                MPCSmall::read(&mut reader, read_raw)
+                MPCSmall::read(&mut reader, is_raw, raw_subgroup_checks)
             })
         };
+
         match read_res {
             Ok(params) => {
                 let dt_read = start_read.elapsed().as_secs();
                 info!("successfully read 'after' params, dt_read={}s", dt_read);
-                after_tx.send(Message::Done(params)).unwrap();
+                after_tx.send(Message::Done(params)).expect("send failure");
             }
             Err(e) => {
                 error!("failed to read 'after' params: {}", e);
-                after_tx.send(Message::Error(e)).unwrap();
+                after_tx.send(Message::Error(e)).expect("send failure");
             }
         };
     });
@@ -970,15 +847,17 @@ fn verify_contribution_small(
         thread::sleep(Duration::from_secs(3));
     }
 
-    before_thread.join().unwrap();
-    after_thread.join().unwrap();
+    before_thread.join().expect("thread join failure");
+    after_thread.join().expect("thread join failure");
 
     info!("verifying contribution");
     let start_verification = Instant::now();
 
-    let calculated_contrib =
-        phase2::small::verify_contribution_small(&before_params.unwrap(), &after_params.unwrap())
-            .expect("failed to calculate expected contribution");
+    let calculated_contrib = phase2::small::verify_contribution_small(
+        &before_params.expect("before params failure"),
+        &after_params.expect("after params failure"),
+    )
+    .expect("failed to calculate expected contribution");
 
     assert_eq!(
         &participant_contrib[..],
@@ -996,8 +875,209 @@ fn verify_contribution_small(
     );
 }
 
-// TODO:
-// fn verify_contribution_large()
+// Non-raw only.
+pub fn read_g1<R: Read>(mut reader: R) -> io::Result<G1Affine> {
+    let mut affine_bytes = G1Uncompressed::empty();
+    reader.read_exact(affine_bytes.as_mut())?;
+    let affine = affine_bytes
+        .into_affine()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    if affine.is_zero() {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "deserialized G1Affine is point at infinity",
+        ))
+    } else {
+        Ok(affine)
+    }
+}
+
+// Non-raw only.
+pub fn read_g2<R: Read>(mut reader: R) -> io::Result<G2Affine> {
+    let mut affine_bytes = G2Uncompressed::empty();
+    reader.read_exact(affine_bytes.as_mut())?;
+    let affine = affine_bytes
+        .into_affine()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    if affine.is_zero() {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "deserialized G2Affine is point at infinity",
+        ))
+    } else {
+        Ok(affine)
+    }
+}
+
+fn seek(file: &mut File, offset: u64) -> io::Result<()> {
+    let pos = file.seek(SeekFrom::Start(offset))?;
+    if pos != offset {
+        Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("seek stopped early, reached: {}, expected: {}", pos, offset),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+struct FileInfo {
+    delta_g1_offset: u64,
+    delta_g1: G1Affine,
+    delta_g2: G2Affine,
+    h_len_offset: u64,
+    h_len: u64,
+    h_first: G1Affine,
+    h_last: G1Affine,
+    l_len: u64,
+    l_first: G1Affine,
+    l_last: G1Affine,
+    cs_hash: [u8; 64],
+    contributions_len_offset: u64,
+    contributions_len: u64,
+}
+
+impl Debug for FileInfo {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("FileInfo")
+            .field("delta_g1_offset", &self.delta_g1_offset)
+            .field("delta_g1", &self.delta_g1)
+            .field("delta_g2", &self.delta_g2)
+            .field("h_len_offset", &self.h_len_offset)
+            .field("h_len", &self.h_len)
+            .field("h_first", &self.h_first)
+            .field("h_last", &self.h_last)
+            .field("l_len", &self.l_len)
+            .field("l_first", &self.l_first)
+            .field("l_last", &self.l_last)
+            .field("cs_hash", &hex_string(&self.cs_hash))
+            .field("contributions_len_offset", &self.contributions_len_offset)
+            .field("contributions_len", &self.contributions_len)
+            .finish()
+    }
+}
+
+impl FileInfo {
+    fn parse_small(path: &str) -> Self {
+        let mut file = File::open(path).expect("failed to open file");
+
+        let delta_g1 = read_g1(&mut file).expect("failed to read delta_g1");
+        let delta_g2 = read_g2(&mut file).expect("failed to read delta_g2");
+
+        let h_len_offset = G1_SIZE + G2_SIZE;
+        let h_len = file.read_u32::<BigEndian>().expect("failed to read h_len") as u64;
+        let h_first = read_g1(&mut file).expect("failed to read first h element");
+        let h_last_offset = h_len_offset + VEC_LEN_SIZE + (h_len - 1) * G1_SIZE;
+        seek(&mut file, h_last_offset).expect("failed to seek to last h element");
+        let h_last = read_g1(&mut file).expect("failed to read last h element");
+
+        let l_len_offset = h_last_offset + G1_SIZE;
+        let l_len = file.read_u32::<BigEndian>().expect("failed to read l_len") as u64;
+        let l_first = read_g1(&mut file).expect("failed to read first l element");
+        let l_last_offset = l_len_offset + VEC_LEN_SIZE + (l_len - 1) * G1_SIZE;
+        seek(&mut file, l_last_offset).expect("failed to seek to last l element");
+        let l_last = read_g1(&mut file).expect("failed to read last l element");
+
+        let mut cs_hash = [0u8; 64];
+        let cs_hash_offset = l_last_offset + G1_SIZE;
+        seek(&mut file, cs_hash_offset).expect("failed to seek to cs_hash");
+        file.read_exact(&mut cs_hash)
+            .expect("failed to read cs_hash");
+
+        let contributions_len_offset = cs_hash_offset + 64;
+        let contributions_len = file
+            .read_u32::<BigEndian>()
+            .expect("failed to read contributions_len") as u64;
+
+        FileInfo {
+            delta_g1_offset: 0,
+            delta_g1,
+            delta_g2,
+            h_len_offset,
+            h_len,
+            h_first,
+            h_last,
+            l_len,
+            l_first,
+            l_last,
+            cs_hash,
+            contributions_len_offset,
+            contributions_len,
+        }
+    }
+
+    fn parse_large(path: &str) -> Self {
+        let mut file = File::open(path).expect("failed to open file");
+
+        let delta_g1_offset = 2 * G1_SIZE + 2 * G2_SIZE;
+        seek(&mut file, delta_g1_offset).expect("failed to seek to delta_g1");
+        let delta_g1 = read_g1(&mut file).expect("failed to read delta_g1");
+        let delta_g2 = read_g2(&mut file).expect("failed to read delta_g2");
+
+        let ic_len_offset = delta_g1_offset + G1_SIZE + G2_SIZE;
+        let ic_len = file.read_u32::<BigEndian>().expect("failed to read ic_len") as u64;
+
+        let h_len_offset = ic_len_offset + VEC_LEN_SIZE + ic_len * G1_SIZE;
+        seek(&mut file, h_len_offset).expect("failed to seek to h_len");
+        let h_len = file.read_u32::<BigEndian>().expect("failed to read h_len") as u64;
+        let h_first = read_g1(&mut file).expect("failed to read first h element");
+        let h_last_offset = h_len_offset + VEC_LEN_SIZE + (h_len - 1) * G1_SIZE;
+        seek(&mut file, h_last_offset).expect("failed to seek to last h element");
+        let h_last = read_g1(&mut file).expect("failed to read last h element");
+
+        let l_len_offset = h_last_offset + G1_SIZE;
+        let l_len = file.read_u32::<BigEndian>().expect("failed to read l_len") as u64;
+        let l_first = read_g1(&mut file).expect("failed to read first l element");
+        let l_last_offset = l_len_offset + VEC_LEN_SIZE + (l_len - 1) * G1_SIZE;
+        seek(&mut file, l_last_offset).expect("failed to seek to last l element");
+        let l_last = read_g1(&mut file).expect("failed to read last l element");
+
+        let a_len_offset = l_last_offset + G1_SIZE;
+        seek(&mut file, a_len_offset).expect("failed to seek to a_len");
+        let a_len = file.read_u32::<BigEndian>().expect("failed to read a_len") as u64;
+
+        let b_g1_len_offset = a_len_offset + VEC_LEN_SIZE + a_len * G1_SIZE;
+        seek(&mut file, b_g1_len_offset).expect("failed to seek to b_g1_len");
+        let b_g1_len = file
+            .read_u32::<BigEndian>()
+            .expect("failed to read b_g1_len") as u64;
+
+        let b_g2_len_offset = b_g1_len_offset + VEC_LEN_SIZE + b_g1_len * G1_SIZE;
+        seek(&mut file, b_g2_len_offset).expect("failed to seek to b_g2_len");
+        let b_g2_len = file
+            .read_u32::<BigEndian>()
+            .expect("failed to read b_g2_len") as u64;
+
+        let mut cs_hash = [0u8; 64];
+        let cs_hash_offset = b_g2_len_offset + VEC_LEN_SIZE + b_g2_len * G2_SIZE;
+        seek(&mut file, cs_hash_offset).expect("failed to seek to cs_hash");
+        file.read_exact(&mut cs_hash)
+            .expect("failed to read cs_hash");
+
+        let contributions_len_offset = cs_hash_offset + 64;
+        let contributions_len = file
+            .read_u32::<BigEndian>()
+            .expect("failed to read contributions_len") as u64;
+
+        FileInfo {
+            delta_g1_offset,
+            delta_g1,
+            delta_g2,
+            h_len_offset,
+            h_len,
+            h_first,
+            h_last,
+            l_len,
+            l_first,
+            l_last,
+            cs_hash,
+            contributions_len_offset,
+            contributions_len,
+        }
+    }
+}
 
 // Writes info logs to stdout, error logs to stderr, and all logs to the file `log_filename` in
 // `rust-fil-proofs`'s top-level directory.
@@ -1016,6 +1096,33 @@ fn setup_logger(log_filename: &str) {
     CombinedLogger::init(vec![term_logger, file_logger]).unwrap_or_else(|e| {
         panic!("failed to create `CombinedLogger`: {}", e);
     });
+}
+
+fn parameter_identifier<Tree: 'static + MerkleTreeTrait>(sector_size: u64, proof: Proof) -> String {
+    match proof {
+        Proof::Sdr => {
+            let public_params = blank_sdr_poseidon_params::<Tree>(sector_size);
+
+            <StackedCompound<Tree, Sha256Hasher> as CacheableParameters<
+                StackedCircuit<Tree, Sha256Hasher>,
+                _,
+            >>::cache_identifier(&public_params)
+        }
+        Proof::Winning => {
+            let public_params = blank_winning_post_poseidon_params::<Tree>(sector_size);
+            <FallbackPoStCompound<Tree> as CacheableParameters<
+                            FallbackPoStCircuit<Tree>,
+                            _,
+                        >>::cache_identifier(&public_params)
+        }
+        Proof::Window => {
+            let public_params = blank_window_post_poseidon_params::<Tree>(sector_size);
+            <FallbackPoStCompound<Tree> as CacheableParameters<
+                           FallbackPoStCircuit<Tree>,
+                           _,
+                        >>::cache_identifier(&public_params)
+        }
+    }
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -1111,29 +1218,24 @@ fn main() {
                 .help("The path to the previous participant's params file"),
         )
         .arg(
-            Arg::with_name("no-raw")
-                .takes_value(false)
-                .help("Don't use raw output format (slow to read for next participant)"),
-        );
-    let contribute_non_streaming_command = SubCommand::with_name("contribute-non-streaming")
-        .about("Contribute to parameters")
-        .arg(
-            Arg::with_name("path-before")
-                .required(true)
-                .help("The path to the previous participant's params file"),
+            Arg::with_name("seed")
+                .long("seed")
+                .takes_value(true)
+                .help("Sets the contribution entropy (32 hex bytes)"),
         );
 
     let verify_command = SubCommand::with_name("verify")
         .about("Verifies that a contribution transitions one set of params to another")
         .arg(
-            Arg::with_name("large")
-                .long("large")
-                .help("Verify the contribution using the large parameter format"),
-        )
-        .arg(
             Arg::with_name("path-after")
                 .required(true)
                 .help("The path to the params file containing the contribution to be verified"),
+        )
+        .arg(
+            Arg::with_name("skip-raw-subgroup-checks")
+                .long("skip-raw-subgroup-checks")
+                .short("s")
+                .help("Skip the slow subgroup check when deserializing each raw G1 point"),
         );
 
     let small_command = SubCommand::with_name("small")
@@ -1152,16 +1254,56 @@ fn main() {
                 .help("The path to the small params file to convert."),
         );
 
+    let merge_command = SubCommand::with_name("merge")
+        .about("Merges small-nonraw and large params into a new large file")
+        .arg(
+            Arg::with_name("path-small")
+                .required(true)
+                .help("Path to the small params file."),
+        )
+        .arg(
+            Arg::with_name("path-large")
+                .required(true)
+                .help("Path to the large params file."),
+        );
+
+    let split_keys_command = SubCommand::with_name("split-keys")
+        .about("Splits the keys from the trusted setup into parameter files")
+        .arg(
+            Arg::with_name("input-path")
+                .required(true)
+                .help("The path to the file that contains all the data."),
+        );
+
+    let parse_command = SubCommand::with_name("parse")
+        .about("Parses file info from large or small-nonraw params")
+        .arg(
+            Arg::with_name("path")
+                .required(true)
+                .help("Path to params file."),
+        );
+
+    let verify_g1_command = SubCommand::with_name("verify-g1")
+        .about("Verifies that all points in small-raw params are valid G1")
+        .arg(
+            Arg::with_name("path")
+                .required(true)
+                .help("Path to small-raw params file."),
+        );
+
     let matches = App::new("phase2")
         .version("1.0")
         .setting(AppSettings::ArgRequiredElseHelp)
         .setting(AppSettings::SubcommandRequired)
         .subcommand(new_command)
         .subcommand(contribute_command)
-        .subcommand(contribute_non_streaming_command)
         .subcommand(verify_command)
         .subcommand(small_command)
         .subcommand(convert_command)
+        .subcommand(merge_command)
+        .subcommand(split_keys_command)
+        .subcommand(parse_command)
+        .subcommand(verify_g1_command)
         .get_matches();
 
     if let (subcommand, Some(matches)) = matches.subcommand() {
@@ -1222,8 +1364,24 @@ fn main() {
                 );
             }
             "contribute" => {
-                let path_before = matches.value_of("path-before").unwrap();
-                let raw = !matches.is_present("no-raw");
+                let path_before = matches
+                    .value_of("path-before")
+                    .expect("path-before match failure");
+
+                let seed: Option<[u8; 32]> = matches.value_of("seed").map(|hex_str| {
+                    assert_eq!(
+                        hex_str.chars().count(),
+                        64,
+                        "`seed` argument must be exactly 64 characters long, found {} characters",
+                        hex_str.chars().count()
+                    );
+                    let mut seed = [0u8; 32];
+                    let seed_vec = hex::decode(hex_str).unwrap_or_else(|_| {
+                        panic!("`seed` argument is not a valid hex string: {}", hex_str);
+                    });
+                    seed.copy_from_slice(&seed_vec[..]);
+                    seed
+                });
 
                 let (proof, hasher, sector_size, head, param_num_before, _param_size, _read_raw) =
                     parse_params_filename(path_before);
@@ -1238,39 +1396,18 @@ fn main() {
                     &head,
                     param_num,
                     ParamSize::Small,
-                    raw,
+                    true,
                 );
                 log_filename.push_str(".log");
                 setup_logger(&log_filename);
 
-                contribute_to_params_streaming(path_before, raw);
-            }
-            "contribute-non-streaming" => {
-                // This path only exists to test streaming vs non-streaming.
-
-                let path_before = matches.value_of("path-before").unwrap();
-
-                let (proof, hasher, sector_size, head, param_num_before, _param_size, _read_raw) =
-                    parse_params_filename(path_before);
-                let param_num = param_num_before + 1;
-
-                // Default to small contributions.
-                let mut log_filename = params_filename(
-                    proof,
-                    hasher,
-                    sector_size,
-                    &head,
-                    param_num,
-                    ParamSize::Small,
-                    false,
-                );
-                log_filename.push_str(".log");
-                setup_logger(&log_filename);
-                contribute_to_params(path_before);
+                contribute_to_params(path_before, seed);
             }
             "verify" => {
-                let use_large_params = matches.is_present("large");
-                let path_after = matches.value_of("path-after").unwrap();
+                let path_after = matches
+                    .value_of("path-after")
+                    .expect("path-after match failure");
+                let raw_subgroup_checks = !matches.is_present("skip-raw-subgroup-checks");
 
                 assert!(
                     Path::new(&path_after).exists(),
@@ -1278,68 +1415,75 @@ fn main() {
                     path_after
                 );
 
+                let (proof, hasher, sector_size, head, param_num_after, _, _) =
+                    parse_params_filename(path_after);
+
                 let log_filename = format!("{}_verify.log", path_after);
                 setup_logger(&log_filename);
 
-                let (proof, hasher, sector_size, head, param_num, param_size, read_raw) =
-                    parse_params_filename(path_after);
-
-                // TODO: in the future, allow for large before params.
-                if param_size.is_large() {
-                    unimplemented!("cannot currently verify large 'before' params");
-                }
-
-                // small, --large => panic!()
-                // large, --large => verify_contribution()
-                // large, no flag => verify_contribution_small()
-                // small, no flag => verify_contribution_small()
-                if param_size.is_small() && use_large_params {
-                    panic!("the `--large` flag can only be used when parameters are large");
-                }
-
-                // Default to using small before params, fallback to large before params is they exist.
-                let mut path_before = params_filename(
-                    proof,
-                    hasher,
-                    sector_size,
-                    &head,
-                    param_num - 1,
-                    ParamSize::Small,
-                    read_raw,
-                );
-
-                if !Path::new(&path_before).exists() {
-                    let path_before_large = params_filename(
+                // Default to using small-raw before params, fallback to non-raw params if raw do
+                // not exist.
+                let path_before = {
+                    let small_raw = params_filename(
                         proof,
                         hasher,
                         sector_size,
                         &head,
-                        param_num - 1,
-                        ParamSize::Large,
-                        false,
+                        param_num_after - 1,
+                        ParamSize::Small,
+                        true,
                     );
-                    info!(
-                        "small 'before' params not found `{}`, attempting to fall back to large 'before' params `{}`",
-                        path_before,
-                        path_before_large,
-                    );
-                    if Path::new(&path_before_large).exists() {
-                        info!("large 'before' params found `{}`, falling back to large 'before' params", path_before_large);
-                        path_before = path_before_large;
+                    let small_nonraw = small_raw.trim_end_matches("_raw").to_string();
+                    let large = small_nonraw.replace("small", "large");
+
+                    if Path::new(&small_raw).exists() {
+                        info!("found small-raw 'before' params: {}", small_raw);
+                        small_raw
+                    } else if Path::new(&small_nonraw).exists() {
+                        info!("found small-nonraw 'before' params: {}", small_nonraw);
+                        small_nonraw
+                    } else if Path::new(&large).exists() {
+                        info!("found large 'before' params: {}", large);
+                        large
                     } else {
-                        panic!(
-                            "large 'before' params not found `{}`, fallback failed",
-                            path_before_large
+                        let err_msg = format!(
+                            "no 'before' params found, attempted: {}, {}, {}",
+                            small_raw, small_nonraw, large
                         );
+                        error!("{}", err_msg);
+                        panic!("{}", err_msg);
                     }
                 };
 
-                let contrib_path = format!("{}.contrib", path_after);
-                assert!(
-                    Path::new(&contrib_path).exists(),
-                    "contribution file not found: {}",
-                    contrib_path
-                );
+                let mut contrib_path = format!("{}.contrib", path_after);
+
+                // It is possible that the .contrib file was generated using a param-size or
+                // serialization format that differs from those in `path_after`, in which case we
+                // need to search for the .contrib file.
+                if !Path::new(&contrib_path).exists() {
+                    warn!("contrib file not found: {}", contrib_path);
+                    let mut found_contrib_file = false;
+                    for _ in 0..2 {
+                        contrib_path = if contrib_path.ends_with("large.contrib") {
+                            contrib_path.replace("large", "small")
+                        } else if contrib_path.ends_with("small.contrib") {
+                            contrib_path.replace("small", "small_raw")
+                        } else {
+                            contrib_path.replace("small_raw", "large")
+                        };
+                        info!("trying contrib file: {}", contrib_path);
+                        if Path::new(&contrib_path).exists() {
+                            found_contrib_file = true;
+                            break;
+                        }
+                        warn!("contrib file not found");
+                    }
+                    if !found_contrib_file {
+                        error!("no contrib file found");
+                        panic!("no contrib file found");
+                    }
+                }
+                info!("using contrib file: {}", contrib_path);
 
                 let contrib = {
                     let mut bytes = [0u8; 64];
@@ -1363,14 +1507,12 @@ fn main() {
                     bytes
                 };
 
-                if use_large_params {
-                    unimplemented!("large param verification is unimplemented");
-                } else {
-                    verify_contribution_small(&path_before, &path_after, contrib, read_raw);
-                }
+                verify_contribution(&path_before, &path_after, contrib, raw_subgroup_checks);
             }
             "small" => {
-                let large_path = matches.value_of("large-path").unwrap();
+                let large_path = matches
+                    .value_of("large-path")
+                    .expect("large-path match failure");
 
                 let (proof, hasher, sector_size, head, param_num, param_size, read_raw) =
                     parse_params_filename(large_path);
@@ -1416,12 +1558,331 @@ fn main() {
                 println!("successfully wrote small params");
             }
             "convert" => {
-                let path_before = matches.value_of("path-before").unwrap();
+                let path_before = matches
+                    .value_of("path-before")
+                    .expect("path-before match failure");
 
                 let log_filename = format!("{}_convert.log", path_before);
                 setup_logger(&log_filename);
 
                 convert_small(path_before)
+            }
+            "merge" => {
+                let path_small = matches
+                    .value_of("path-small")
+                    .expect("path-small match failure");
+                let path_large_old = matches
+                    .value_of("path-large")
+                    .expect("path-large match failure");
+
+                assert!(
+                    Path::new(path_small).exists(),
+                    "small file does not exist: {}",
+                    path_small
+                );
+                assert!(
+                    Path::new(path_large_old).exists(),
+                    "large file does not exist: {}",
+                    path_large_old
+                );
+
+                let (
+                    proof_small,
+                    hasher_small,
+                    sector_size_small,
+                    head_small,
+                    param_num_small,
+                    param_size_small,
+                    is_raw_small,
+                ) = parse_params_filename(path_small);
+
+                let (
+                    proof_large,
+                    hasher_large,
+                    sector_size_large,
+                    head_large,
+                    param_num_large,
+                    param_size_large,
+                    _,
+                ) = parse_params_filename(path_large_old);
+
+                assert!(
+                    param_size_small.is_small(),
+                    "small params file is not small"
+                );
+                assert!(
+                    param_size_large.is_large(),
+                    "large params file is not large"
+                );
+                assert_eq!(
+                    proof_small, proof_large,
+                    "small and large params do not have the same proof name"
+                );
+                assert_eq!(
+                    hasher_small, hasher_large,
+                    "small and large params do not have the same hasher name"
+                );
+                assert_eq!(
+                    sector_size_small, sector_size_large,
+                    "small and large params do not have the same sector-size name"
+                );
+                assert_eq!(
+                    head_small, head_large,
+                    "small and large params do not have the same head commit"
+                );
+                assert!(
+                    param_num_small > param_num_large,
+                    "small params must contain more contributions than the large"
+                );
+                assert!(!is_raw_small, "small params must be non-raw");
+
+                let FileInfo {
+                    h_len: h_len_small,
+                    l_len: l_len_small,
+                    cs_hash: cs_hash_small,
+                    contributions_len_offset: contributions_len_offset_small,
+                    contributions_len: contributions_len_small,
+                    ..
+                } = FileInfo::parse_small(&path_small);
+                println!("parsed small file");
+
+                let FileInfo {
+                    delta_g1_offset: delta_g1_offset_large,
+                    h_len_offset: h_len_offset_large,
+                    h_len: h_len_large,
+                    l_len: l_len_large,
+                    cs_hash: cs_hash_large,
+                    contributions_len_offset: contributions_len_offset_large,
+                    contributions_len: contributions_len_large,
+                    ..
+                } = FileInfo::parse_large(&path_large_old);
+                println!("parsed large file");
+
+                assert_eq!(
+                    h_len_small, h_len_large,
+                    "parsed files have different h_len: small: {}, large: {}",
+                    h_len_small, h_len_large
+                );
+                let h_len = h_len_small;
+                assert_eq!(
+                    l_len_small, l_len_large,
+                    "parsed files have different l_len: small: {}, large: {}",
+                    l_len_small, l_len_large,
+                );
+                let l_len = l_len_small;
+                assert_eq!(
+                    &cs_hash_small[..],
+                    &cs_hash_large[..],
+                    "parsed files have different cs_hash: small: {:?}, large: {:?}",
+                    &cs_hash_small[..],
+                    &cs_hash_large[..],
+                );
+                assert!(
+                    contributions_len_small > contributions_len_large,
+                    "small file does not contain additional contributions, small: {}, large: {}",
+                    contributions_len_small,
+                    contributions_len_large
+                );
+                println!("files are consistent");
+
+                println!("copying large file");
+                let path_large_new = path_small.replace("small", "large");
+                let large_len_old =
+                    fs::copy(&path_large_old, &path_large_new).expect("failed to copy large file");
+                let append_len = (contributions_len_small - contributions_len_large) * PUBKEY_SIZE;
+                let large_len_new = large_len_old + append_len;
+                let mut file_large_new = OpenOptions::new()
+                    .write(true)
+                    .open(&path_large_new)
+                    .expect("failed to open new large file");
+                file_large_new
+                    .set_len(large_len_new)
+                    .expect("failed to set new large file length");
+
+                println!("merging small file into copy");
+                let mut file_small = File::open(path_small).expect("failed to open small file");
+
+                // Copy delta_g1/g2
+                let mut delta_bytes = (&mut file_small).take(G1_SIZE + G2_SIZE);
+                seek(&mut file_large_new, delta_g1_offset_large)
+                    .expect("failed to seek to delta_g1 in new file");
+                io::copy(&mut delta_bytes, &mut file_large_new)
+                    .expect("failed to merge delta_g1/g2");
+                println!("merged delta_g1/g2");
+
+                // Copy h_len, h, l_len, l
+                let mut h_l_bytes = (&mut file_small)
+                    .take(VEC_LEN_SIZE + h_len * G1_SIZE + VEC_LEN_SIZE + l_len * G1_SIZE);
+                seek(&mut file_large_new, h_len_offset_large)
+                    .expect("failed to seek to h in new file");
+                io::copy(&mut h_l_bytes, &mut file_large_new)
+                    .expect("failed to merge h, h_len, and l");
+                println!("merged h_len, h, l_len, and l");
+
+                // Copy contributions_len and contributions
+                seek(&mut file_small, contributions_len_offset_small)
+                    .expect("failed to seek to contributions_len in small file");
+                seek(&mut file_large_new, contributions_len_offset_large)
+                    .expect("failed to seek to contributions_len in new file");
+                io::copy(&mut file_small, &mut file_large_new)
+                    .expect("failed to merge contributions");
+                println!("merged contributions");
+
+                println!("successfully merged");
+            }
+            "split-keys" => {
+                let input_path = matches
+                    .value_of("input-path")
+                    .expect("failed to read input-path argument");
+
+                println!("reading params: {}", input_path);
+
+                // Get the identifier for the output files based in the input file's name
+                let (proof, _hasher, sector_size_enum, _head, param_num, param_size, _read_raw) =
+                    parse_params_filename(input_path);
+                assert!(param_size.is_large(), "params must be large");
+                let sector_size = sector_size_enum.as_u64();
+                let identifier = with_shape!(sector_size, parameter_identifier, sector_size, proof);
+
+                let mut input_file = File::open(input_path)
+                    .unwrap_or_else(|_| panic!("failed to open {}", input_path));
+
+                // Extract the vk data into its own file.
+                {
+                    let vk_data = groth16::VerifyingKey::<Bls12>::read(&input_file)
+                        .expect("failed to deserialize vk from input file");
+                    let vk_path = verifying_key_id(&identifier);
+                    println!("writing verifying key to file: {}", vk_path);
+                    let mut vk_file = File::create(&vk_path)
+                        .unwrap_or_else(|_| panic!("failed to create {}", vk_path));
+                    vk_data.write(&mut vk_file).unwrap_or_else(|_| {
+                        panic!("failed to write verification keys to file {}", vk_path)
+                    });
+                    let vk_file_size = vk_file
+                        .seek(SeekFrom::Current(0))
+                        .unwrap_or_else(|_| panic!("failed to seek in {}", vk_path));
+                    println!("size of the verifying key is {} bytes", vk_file_size);
+                }
+
+                // The params file is the trusted setup phase2 result without the contributions
+                // at the end of the file.
+                {
+                    let params_path = parameter_id(&identifier);
+                    println!("writing parameters to file: {}", params_path);
+                    let mut params_file = File::create(&params_path)
+                        .unwrap_or_else(|_| panic!("failed to create {}", params_path));
+
+                    // input_file_size - cs_hash - contributions_length -
+                    //   (num_contributions * public_key_size)
+                    let params_file_size = input_file
+                        .metadata()
+                        .unwrap_or_else(|_| panic!("failed to get filesize of {}", input_path))
+                        .len()
+                        - 64
+                        - 4
+                        - (param_num as u64 * 544);
+                    println!("size of the parameters file is {} bytes", params_file_size);
+                    // Make sure the cursor is at the beginning of the file (it was moved
+                    // during the extraction of the vk data)
+                    input_file
+                        .seek(SeekFrom::Start(0))
+                        .expect("cannot seek to beginning of the input file");
+
+                    io::copy(
+                        &mut Read::by_ref(&mut input_file).take(params_file_size),
+                        &mut params_file,
+                    )
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to copy params from {} to {}",
+                            input_path, params_path
+                        )
+                    });
+                }
+
+                // Writing the contributions to disk is not needed for the final parameters,
+                // they won't be published, they are only there for verification purpose.
+                {
+                    let contribs_path =
+                        format!("v{}-{}.contribs", parameter_cache::VERSION, &identifier);
+                    println!("writing contributions to file: {}", contribs_path);
+                    let mut contribs_file = File::create(&contribs_path)
+                        .unwrap_or_else(|_| panic!("failed to create {}", contribs_path));
+                    // The input file is already sought to the right offset, due to writing the
+                    // params file
+                    let contribs_file_size = io::copy(&mut input_file, &mut contribs_file)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "Failed to copy contributions from {} to {}",
+                                input_path, contribs_path
+                            )
+                        });
+                    println!(
+                        "size of the contributions file is {} bytes",
+                        contribs_file_size
+                    );
+                }
+
+                // The metadata is needed for the publication of the parameters.
+                {
+                    let meta_path = metadata_id(&identifier);
+                    println!("writing metadata to file: {}", meta_path);
+                    let mut meta_file = File::create(&meta_path)
+                        .unwrap_or_else(|_| panic!("failed to create {}", meta_path));
+                    write!(&mut meta_file, r#"{{"sector_size":{}}}"#, sector_size).unwrap_or_else(
+                        |_| panic!("failed to write meta information to {}", meta_path),
+                    );
+                }
+
+                // The info file contains the filename the parameter was created of.
+                {
+                    let info_path = format!("v{}-{}.info", parameter_cache::VERSION, &identifier);
+                    println!("writing info to file: {}", info_path);
+                    let mut info_file = File::create(&info_path)
+                        .unwrap_or_else(|_| panic!("failed to create {}", info_path));
+                    writeln!(&mut info_file, "{}", input_path)
+                        .unwrap_or_else(|_| panic!("failed to write info data to {}", info_path));
+                }
+            }
+            "parse" => {
+                let path = matches.value_of("path").expect("path match failure");
+                let (_, _, _, _, _, size, raw) = parse_params_filename(&path);
+
+                if raw {
+                    unimplemented!("`parse` command does not currently support raw params");
+                }
+
+                let file_info = if size.is_large() {
+                    FileInfo::parse_large(&path)
+                } else {
+                    FileInfo::parse_small(&path)
+                };
+
+                println!("{:#?}", file_info);
+            }
+            "verify-g1" => {
+                let path = matches.value_of("path").expect("path match failure");
+                let (_, _, _, _, _, _, raw) = parse_params_filename(&path);
+
+                assert!(
+                    raw,
+                    "found non-raw params, `verify-g1` is relevant only when verifying small-raw \
+                    params"
+                );
+
+                let file = File::open(&path).expect("failed to open params file");
+                let mut reader = BufReader::with_capacity(1024 * 1024, file);
+
+                println!("starting deserialization");
+
+                let start = Instant::now();
+                let _params =
+                    MPCSmall::read(&mut reader, raw, true).expect("mpc small read failure");
+
+                println!(
+                    "succesfully verified h and l G1 points, dt={}s",
+                    start.elapsed().as_secs()
+                );
             }
             _ => unreachable!(),
         }
