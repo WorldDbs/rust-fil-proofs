@@ -43,3 +43,50 @@ macro_rules! check {
         }
     };
 }
+
+macro_rules! prefetch {
+    ($val:expr) => {
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        unsafe {
+            #[cfg(target_arch = "x86")]
+            use std::arch::x86::*;
+            #[cfg(target_arch = "x86_64")]
+            use std::arch::x86_64::*;
+
+            _mm_prefetch($val, _MM_HINT_T0);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! compress256 {
+    ($state:expr, $buf:expr, 1) => {
+        let blocks = [*GenericArray::<u8, U64>::from_slice(&$buf[..64])];
+        sha2::compress256((&mut $state[..8]).try_into().unwrap(), &blocks[..]);
+    };
+    ($state:expr, $buf:expr, 2) => {
+        let blocks = [
+            *GenericArray::<u8, U64>::from_slice(&$buf[..64]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[64..128]),
+        ];
+        sha2::compress256((&mut $state[..8]).try_into().unwrap(), &blocks[..]);
+    };
+    ($state:expr, $buf:expr, 3) => {
+        let blocks = [
+            *GenericArray::<u8, U64>::from_slice(&$buf[..64]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[64..128]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[128..192]),
+        ];
+        sha2::compress256((&mut $state[..8]).try_into().unwrap(), &blocks[..]);
+    };
+    ($state:expr, $buf:expr, 5) => {
+        let blocks = [
+            *GenericArray::<u8, U64>::from_slice(&$buf[..64]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[64..128]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[128..192]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[192..256]),
+            *GenericArray::<u8, U64>::from_slice(&$buf[256..320]),
+        ];
+        sha2::compress256((&mut $state[..8]).try_into().unwrap(), &blocks[..]);
+    };
+}
