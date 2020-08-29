@@ -178,16 +178,51 @@ fn winning_post<Tree: 'static + MerkleTreeTrait>(sector_size: u64, fake: bool) -
     assert_eq!(challenged_sectors[0], 0); // with a sector_count of 1, the only valid index is 0
 
     let pub_replicas = vec![(sector_id, PublicReplicaInfo::new(comm_r)?)];
+    let private_replica_info =
+        PrivateReplicaInfo::new(replica.path().into(), comm_r, cache_dir.path().into())?;
+
+    /////////////////////////////////////////////
+    // The following methods of proof generation are functionally equivalent:
+    // 1)
+    //
+    /*
     let priv_replicas = vec![(
         sector_id,
-        PrivateReplicaInfo::new(replica.path().into(), comm_r, cache_dir.path().into())?,
+        private_replica_info,
     )];
-
     let proof = generate_winning_post::<Tree>(&config, &randomness, &priv_replicas[..], prover_id)?;
+     */
+    //
+    // 2)
+    let mut vanilla_proofs = Vec::with_capacity(sector_count);
+    let challenges = generate_fallback_sector_challenges::<Tree>(
+        &config,
+        &randomness,
+        &vec![sector_id],
+        prover_id,
+    )?;
+
+    let single_proof = generate_single_vanilla_proof::<Tree>(
+        &config,
+        sector_id,
+        &private_replica_info,
+        &challenges[&sector_id],
+    )?;
+
+    vanilla_proofs.push(single_proof);
+
+    let proof = generate_winning_post_with_vanilla::<Tree>(
+        &config,
+        &randomness,
+        prover_id,
+        vanilla_proofs,
+    )?;
+    /////////////////////////////////////////////
 
     let valid =
         verify_winning_post::<Tree>(&config, &randomness, &pub_replicas[..], prover_id, &proof)?;
     assert!(valid, "proof did not verify");
+
     Ok(())
 }
 
@@ -197,9 +232,9 @@ fn test_window_post_single_partition_smaller_2kib_base_8() -> Result<()> {
     let sector_size = SECTOR_SIZE_2_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape2KiB>(sector_size, sector_count / 2, sector_count, false)?;
     window_post::<SectorShape2KiB>(sector_size, sector_count / 2, sector_count, true)
@@ -211,9 +246,9 @@ fn test_window_post_two_partitions_matching_2kib_base_8() -> Result<()> {
     let sector_size = SECTOR_SIZE_2_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape2KiB>(sector_size, 2 * sector_count, sector_count, false)?;
     window_post::<SectorShape2KiB>(sector_size, 2 * sector_count, sector_count, true)
@@ -225,9 +260,9 @@ fn test_window_post_two_partitions_matching_4kib_sub_8_2() -> Result<()> {
     let sector_size = SECTOR_SIZE_4_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape4KiB>(sector_size, 2 * sector_count, sector_count, false)?;
     window_post::<SectorShape4KiB>(sector_size, 2 * sector_count, sector_count, true)
@@ -239,9 +274,9 @@ fn test_window_post_two_partitions_matching_16kib_sub_8_8() -> Result<()> {
     let sector_size = SECTOR_SIZE_16_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape16KiB>(sector_size, 2 * sector_count, sector_count, false)?;
     window_post::<SectorShape16KiB>(sector_size, 2 * sector_count, sector_count, true)
@@ -253,9 +288,9 @@ fn test_window_post_two_partitions_matching_32kib_top_8_8_2() -> Result<()> {
     let sector_size = SECTOR_SIZE_32_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape32KiB>(sector_size, 2 * sector_count, sector_count, false)?;
     window_post::<SectorShape32KiB>(sector_size, 2 * sector_count, sector_count, true)
@@ -267,9 +302,9 @@ fn test_window_post_two_partitions_smaller_2kib_base_8() -> Result<()> {
     let sector_size = SECTOR_SIZE_2_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape2KiB>(sector_size, 2 * sector_count - 1, sector_count, false)?;
     window_post::<SectorShape2KiB>(sector_size, 2 * sector_count - 1, sector_count, true)
@@ -281,9 +316,9 @@ fn test_window_post_single_partition_matching_2kib_base_8() -> Result<()> {
     let sector_size = SECTOR_SIZE_2_KIB;
     let sector_count = *WINDOW_POST_SECTOR_COUNT
         .read()
-        .unwrap()
+        .expect("WINDOW_POST_SECTOR_COUNT poisoned")
         .get(&sector_size)
-        .unwrap();
+        .expect("unknown sector size");
 
     window_post::<SectorShape2KiB>(sector_size, sector_count, sector_count, false)?;
     window_post::<SectorShape2KiB>(sector_size, sector_count, sector_count, true)
@@ -334,10 +369,41 @@ fn window_post<Tree: 'static + MerkleTreeTrait>(
         priority: false,
     };
 
-    let proof = generate_window_post::<Tree>(&config, &randomness, &priv_replicas, prover_id)?;
+    /////////////////////////////////////////////
+    // The following methods of proof generation are functionally equivalent:
+    // 1)
+    //let proof = generate_window_post::<Tree>(&config, &randomness, &priv_replicas, prover_id)?;
+    //
+    // 2)
+    let replica_sectors = priv_replicas
+        .iter()
+        .map(|(sector, _replica)| *sector)
+        .collect::<Vec<SectorId>>();
+
+    let challenges = generate_fallback_sector_challenges::<Tree>(
+        &config,
+        &randomness,
+        &replica_sectors,
+        prover_id,
+    )?;
+
+    let mut vanilla_proofs = Vec::with_capacity(replica_sectors.len());
+
+    for (sector_id, replica) in priv_replicas.iter() {
+        let sector_challenges = &challenges[sector_id];
+        let single_proof =
+            generate_single_vanilla_proof::<Tree>(&config, *sector_id, replica, sector_challenges)?;
+
+        vanilla_proofs.push(single_proof);
+    }
+
+    let proof =
+        generate_window_post_with_vanilla::<Tree>(&config, &randomness, prover_id, vanilla_proofs)?;
+    /////////////////////////////////////////////
 
     let valid = verify_window_post::<Tree>(&config, &randomness, &pub_replicas, prover_id, &proof)?;
     assert!(valid, "proof did not verify");
+
     Ok(())
 }
 
@@ -378,12 +444,16 @@ fn create_seal<R: Rng, Tree: 'static + MerkleTreeTrait>(
     let config = PoRepConfig {
         sector_size: SectorSize(sector_size),
         partitions: PoRepProofPartitions(
-            *POREP_PARTITIONS.read().unwrap().get(&sector_size).unwrap(),
+            *POREP_PARTITIONS
+                .read()
+                .expect("POREM_PARTITIONS poisoned")
+                .get(&sector_size)
+                .expect("unknown sector size"),
         ),
         porep_id: arbitrary_porep_id,
     };
 
-    let cache_dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().expect("failed to create temp dir");
 
     let ticket = rng.gen();
     let seed = rng.gen();
