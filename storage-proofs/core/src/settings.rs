@@ -16,7 +16,8 @@ const PREFIX: &str = "FIL_PROOFS";
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub maximize_caching: bool,
+    pub verify_cache: bool,
+    pub verify_production_params: bool,
     pub pedersen_hash_exp_window_size: u32,
     pub use_gpu_column_builder: bool,
     pub max_gpu_column_batch_size: u32,
@@ -28,12 +29,15 @@ pub struct Settings {
     pub window_post_synthesis_num_cpus: u32,
     pub parameter_cache: String,
     pub parent_cache: String,
+    pub use_fil_blst: bool,
+    pub use_multicore_sdr: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            maximize_caching: true,
+            verify_cache: false,
+            verify_production_params: false,
             pedersen_hash_exp_window_size: 16,
             use_gpu_column_builder: false,
             max_gpu_column_batch_size: 400_000,
@@ -48,6 +52,8 @@ impl Default for Settings {
             // The name is retained for backwards compatibility.
             parameter_cache: "/var/tmp/filecoin-proof-parameters/".to_string(),
             parent_cache: cache("filecoin-parents"),
+            use_fil_blst: false,
+            use_multicore_sdr: false,
         }
     }
 }
