@@ -47,7 +47,7 @@ pub struct Sha256Function(Sha256);
 impl StdHasher for Sha256Function {
     #[inline]
     fn write(&mut self, msg: &[u8]) {
-        self.0.input(msg)
+        self.0.update(msg)
     }
 
     #[inline]
@@ -93,7 +93,9 @@ impl Hashable<Sha256Function> for Sha256Domain {
 impl From<Fr> for Sha256Domain {
     fn from(val: Fr) -> Self {
         let mut res = Self::default();
-        val.into_repr().write_le(&mut res.0[0..32]).unwrap();
+        val.into_repr()
+            .write_le(&mut res.0[0..32])
+            .expect("write_le failure");
 
         res
     }
@@ -102,7 +104,7 @@ impl From<Fr> for Sha256Domain {
 impl From<FrRepr> for Sha256Domain {
     fn from(val: FrRepr) -> Self {
         let mut res = Self::default();
-        val.write_le(&mut res.0[0..32]).unwrap();
+        val.write_le(&mut res.0[0..32]).expect("write_le failure");
 
         res
     }
@@ -111,9 +113,9 @@ impl From<FrRepr> for Sha256Domain {
 impl From<Sha256Domain> for Fr {
     fn from(val: Sha256Domain) -> Self {
         let mut res = FrRepr::default();
-        res.read_le(&val.0[0..32]).unwrap();
+        res.read_le(&val.0[0..32]).expect("read_le failure");
 
-        Fr::from_repr(res).unwrap()
+        Fr::from_repr(res).expect("from_repr failure")
     }
 }
 
@@ -179,7 +181,7 @@ impl HashFunction<Sha256Domain> for Sha256Function {
         let hashed = Sha256::new()
             .chain(AsRef::<[u8]>::as_ref(a))
             .chain(AsRef::<[u8]>::as_ref(b))
-            .result();
+            .finalize();
         let mut res = Sha256Domain::default();
         res.0.copy_from_slice(&hashed[..]);
         res.trim_to_fr32();
@@ -303,7 +305,7 @@ impl Algorithm<Sha256Domain> for Sha256Function {
     #[inline]
     fn hash(&mut self) -> Sha256Domain {
         let mut h = [0u8; 32];
-        h.copy_from_slice(self.0.clone().result().as_ref());
+        h.copy_from_slice(self.0.clone().finalize().as_ref());
         let mut dd = Sha256Domain::from(h);
         dd.trim_to_fr32();
         dd
@@ -375,12 +377,13 @@ mod tests {
 
         let left_bits: Vec<Boolean> = {
             let mut cs = cs.namespace(|| "left");
-            bytes_into_boolean_vec(&mut cs, Some(left.as_slice()), 256).unwrap()
+            bytes_into_boolean_vec(&mut cs, Some(left.as_slice()), 256).expect("left bits failure")
         };
 
         let right_bits: Vec<Boolean> = {
             let mut cs = cs.namespace(|| "right");
-            bytes_into_boolean_vec(&mut cs, Some(right.as_slice()), 256).unwrap()
+            bytes_into_boolean_vec(&mut cs, Some(right.as_slice()), 256)
+                .expect("right bits failure")
         };
 
         let out = Sha256Function::hash_leaf_bits_circuit(
@@ -400,7 +403,7 @@ mod tests {
 
         assert_eq!(
             expected,
-            out.get_value().unwrap(),
+            out.get_value().expect("get_value failure"),
             "circuit and non circuit do not match"
         );
     }
