@@ -21,6 +21,7 @@ use storage_proofs::porep::stacked::{
 };
 use storage_proofs::proof::ProofScheme;
 use storage_proofs::sector::SectorId;
+use storage_proofs::settings;
 use storage_proofs::util::default_rows_to_discard;
 
 use crate::api::util::{
@@ -56,7 +57,7 @@ where
     S: AsRef<Path>,
     T: AsRef<Path>,
 {
-    info!("seal_pre_commit_phase1:start");
+    info!("seal_pre_commit_phase1:start: {:?}", sector_id);
 
     // Sanity check all input path types.
     ensure!(
@@ -184,7 +185,7 @@ where
         comm_d,
     };
 
-    info!("seal_pre_commit_phase1:finish");
+    info!("seal_pre_commit_phase1:finish: {:?}", sector_id);
     Ok(out)
 }
 
@@ -323,7 +324,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
     pre_commit: SealPreCommitOutput,
     piece_infos: &[PieceInfo],
 ) -> Result<SealCommitPhase1Output<Tree>> {
-    info!("seal_commit_phase1:start");
+    info!("seal_commit_phase1:start: {:?}", sector_id);
 
     // Sanity check all input path types.
     ensure!(
@@ -434,7 +435,7 @@ pub fn seal_commit_phase1<T: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
         ticket,
     };
 
-    info!("seal_commit_phase1:finish");
+    info!("seal_commit_phase1:finish: {:?}", sector_id);
     Ok(out)
 }
 
@@ -445,7 +446,7 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
     prover_id: ProverId,
     sector_id: SectorId,
 ) -> Result<SealCommitOutput> {
-    info!("seal_commit_phase2:start");
+    info!("seal_commit_phase2:start: {:?}", sector_id);
 
     let SealCommitPhase1Output {
         vanilla_proofs,
@@ -528,7 +529,7 @@ pub fn seal_commit_phase2<Tree: 'static + MerkleTreeTrait>(
 
     let out = SealCommitOutput { proof: buf };
 
-    info!("seal_commit_phase2:finish");
+    info!("seal_commit_phase2:finish: {:?}", sector_id);
     Ok(out)
 }
 
@@ -570,11 +571,10 @@ pub fn verify_seal<Tree: 'static + MerkleTreeTrait>(
     seed: Ticket,
     proof_vec: &[u8],
 ) -> Result<bool> {
-    info!("verify_seal:start");
+    info!("verify_seal:start: {:?}", sector_id);
     ensure!(comm_d_in != [0; 32], "Invalid all zero commitment (comm_d)");
     ensure!(comm_r_in != [0; 32], "Invalid all zero commitment (comm_r)");
 
-    let sector_bytes = PaddedBytesAmount::from(porep_config);
     let comm_r: <Tree::Hasher as Hasher>::Domain = as_safe_commitment(&comm_r_in, "comm_r")?;
     let comm_d: DefaultPieceDomain = as_safe_commitment(&comm_d_in, "comm_d")?;
 
@@ -609,34 +609,59 @@ pub fn verify_seal<Tree: 'static + MerkleTreeTrait>(
             k: None,
         };
 
-    let verifying_key = get_stacked_verifying_key::<Tree>(porep_config)?;
+    let use_fil_blst = settings::SETTINGS
+        .lock()
+        .expect("use_fil_blst settings lock failure")
+        .use_fil_blst;
 
-    info!(
-        "got verifying key ({}) while verifying seal",
-        u64::from(sector_bytes)
-    );
+    let result = if use_fil_blst {
+        info!("verify_seal: use_fil_blst=true");
+        let verifying_key_path = porep_config.get_cache_verifying_key_path::<Tree>()?;
 
-    let proof = MultiProof::new_from_reader(
-        Some(usize::from(PoRepProofPartitions::from(porep_config))),
-        proof_vec,
-        &verifying_key,
-    )?;
+        StackedCompound::verify_blst(
+            &compound_public_params,
+            &public_inputs,
+            &proof_vec,
+            proof_vec.len() / 192,
+            &ChallengeRequirements {
+                minimum_challenges: *POREP_MINIMUM_CHALLENGES
+                    .read()
+                    .expect("POREP_MINIMUM_CHALLENGES poisoned")
+                    .get(&u64::from(SectorSize::from(porep_config)))
+                    .expect("unknown sector size") as usize,
+            },
+            &verifying_key_path,
+        )
+    } else {
+        let sector_bytes = PaddedBytesAmount::from(porep_config);
+        let verifying_key = get_stacked_verifying_key::<Tree>(porep_config)?;
 
-    let result = StackedCompound::verify(
-        &compound_public_params,
-        &public_inputs,
-        &proof,
-        &ChallengeRequirements {
-            minimum_challenges: *POREP_MINIMUM_CHALLENGES
-                .read()
-                .unwrap()
-                .get(&u64::from(SectorSize::from(porep_config)))
-                .expect("unknown sector size") as usize,
-        },
-    )
-    .map_err(Into::into);
+        info!(
+            "got verifying key ({}) while verifying seal",
+            u64::from(sector_bytes)
+        );
 
-    info!("verify_seal:finish");
+        let proof = MultiProof::new_from_reader(
+            Some(usize::from(PoRepProofPartitions::from(porep_config))),
+            proof_vec,
+            &verifying_key,
+        )?;
+
+        StackedCompound::verify(
+            &compound_public_params,
+            &public_inputs,
+            &proof,
+            &ChallengeRequirements {
+                minimum_challenges: *POREP_MINIMUM_CHALLENGES
+                    .read()
+                    .expect("POREP_MINIMUM_CHALLENGES poisoned")
+                    .get(&u64::from(SectorSize::from(porep_config)))
+                    .expect("unknown sector size") as usize,
+            },
+        )
+    };
+
+    info!("verify_seal:finish: {:?}", sector_id);
     result
 }
 
@@ -748,7 +773,7 @@ pub fn verify_batch_seal<Tree: 'static + MerkleTreeTrait>(
         &ChallengeRequirements {
             minimum_challenges: *POREP_MINIMUM_CHALLENGES
                 .read()
-                .unwrap()
+                .expect("POREP_MINIMUM_CHALLENGES poisoned")
                 .get(&u64::from(SectorSize::from(porep_config)))
                 .expect("unknown sector size") as usize,
         },
@@ -794,6 +819,30 @@ pub fn fauxrep_aux<
         &cache_path,
         sector_bytes as usize,
     )?;
+
+    let p_aux_path = cache_path.as_ref().join(CacheKey::PAux.to_string());
+    let mut f_p_aux = File::create(&p_aux_path)
+        .with_context(|| format!("could not create file p_aux={:?}", p_aux_path))?;
+    let p_aux_bytes = serialize(&p_aux)?;
+    f_p_aux
+        .write_all(&p_aux_bytes)
+        .with_context(|| format!("could not write to file p_aux={:?}", p_aux_path))?;
+
+    let mut commitment = [0u8; 32];
+    commitment[..].copy_from_slice(&comm_r.into_bytes()[..]);
+    Ok(commitment)
+}
+
+pub fn fauxrep2<R: AsRef<Path>, S: AsRef<Path>, Tree: 'static + MerkleTreeTrait>(
+    cache_path: R,
+    existing_p_aux_path: S,
+) -> Result<Commitment> {
+    let mut rng = rand::thread_rng();
+
+    let fake_comm_c = <Tree::Hasher as Hasher>::Domain::random(&mut rng);
+
+    let (comm_r, p_aux) =
+        StackedDrg::<Tree, DefaultPieceHasher>::fake_comm_r(fake_comm_c, existing_p_aux_path)?;
 
     let p_aux_path = cache_path.as_ref().join(CacheKey::PAux.to_string());
     let mut f_p_aux = File::create(&p_aux_path)
