@@ -73,7 +73,7 @@ impl<'a, Tree: 'static + MerkleTreeTrait>
                     pub_inputs.randomness,
                     sector.id.into(),
                     challenge_index,
-                )?;
+                );
 
                 let por_pub_inputs = por::PublicInputs {
                     commitment: None,
@@ -243,7 +243,6 @@ mod tests {
             priority: false,
         };
 
-        // Construct and store an MT using a named DiskStore.
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_path = temp_dir.path();
 
