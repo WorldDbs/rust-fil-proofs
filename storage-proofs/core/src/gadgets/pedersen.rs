@@ -27,7 +27,7 @@ where
     );
 
     let mut chunks = data.chunks(PEDERSEN_BLOCK_SIZE);
-    let mut cur: Vec<Boolean> = chunks.next().expect("chunks.next failure").to_vec();
+    let mut cur: Vec<Boolean> = chunks.next().unwrap().to_vec();
     let chunks_len = chunks.len();
 
     for (i, block) in chunks.enumerate() {
@@ -81,9 +81,9 @@ mod tests {
     use super::*;
 
     use crate::crypto;
+    use crate::gadgets::TestConstraintSystem;
     use crate::util::bytes_into_boolean_vec;
     use bellperson::gadgets::boolean::Boolean;
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use bellperson::ConstraintSystem;
     use paired::bls12_381::Bls12;
     use rand::{Rng, SeedableRng};
@@ -101,8 +101,7 @@ mod tests {
 
             let data_bits: Vec<Boolean> = {
                 let mut cs = cs.namespace(|| "data");
-                bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len())
-                    .expect("bytes_into_boolean_vec failure")
+                bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len()).unwrap()
             };
             let out =
                 pedersen_compression_num(&mut cs, &data_bits).expect("pedersen hashing failed");
@@ -119,7 +118,7 @@ mod tests {
 
             assert_eq!(
                 expected,
-                out.get_value().expect("get_value failure"),
+                out.get_value().unwrap(),
                 "circuit and non circuit do not match"
             );
         }
@@ -144,8 +143,7 @@ mod tests {
 
             let data_bits: Vec<Boolean> = {
                 let mut cs = cs.namespace(|| "data");
-                bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len())
-                    .expect("bytes_into_boolean_vec failure")
+                bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len()).unwrap()
             };
             let out = pedersen_md_no_padding(cs.namespace(|| "pedersen"), &data_bits)
                 .expect("pedersen hashing failed");
@@ -162,7 +160,7 @@ mod tests {
 
             assert_eq!(
                 expected,
-                out.get_value().expect("get_value failure"),
+                out.get_value().unwrap(),
                 "circuit and non circuit do not match {} bytes",
                 bytes
             );
