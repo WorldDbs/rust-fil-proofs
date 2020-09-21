@@ -4,7 +4,6 @@ use crate::types::*;
 pub struct SectorClass {
     pub sector_size: SectorSize,
     pub partitions: PoRepProofPartitions,
-    pub porep_id: [u8; 32],
 }
 
 impl From<SectorClass> for PoRepConfig {
@@ -12,12 +11,10 @@ impl From<SectorClass> for PoRepConfig {
         let SectorClass {
             sector_size,
             partitions,
-            porep_id,
         } = x;
         PoRepConfig {
             sector_size,
             partitions,
-            porep_id,
         }
     }
 }
