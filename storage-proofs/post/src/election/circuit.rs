@@ -178,13 +178,13 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use ff::Field;
     use paired::bls12_381::{Bls12, Fr};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use storage_proofs_core::{
         compound_proof::CompoundProof,
+        gadgets::TestConstraintSystem,
         hasher::{Domain, HashFunction, Hasher, PedersenHasher, PoseidonHasher},
         merkle::{generate_tree, get_base_tree_count, LCTree, MerkleTreeTrait},
         proof::ProofScheme,
@@ -197,12 +197,12 @@ mod tests {
 
     #[test]
     fn test_election_post_circuit_pedersen() {
-        test_election_post_circuit::<LCTree<PedersenHasher, U8, U0, U0>>(388_520);
+        test_election_post_circuit::<LCTree<PedersenHasher, U8, U0, U0>>(389_883);
     }
 
     #[test]
     fn test_election_post_circuit_poseidon() {
-        test_election_post_circuit::<LCTree<PoseidonHasher, U8, U0, U0>>(22_940);
+        test_election_post_circuit::<LCTree<PoseidonHasher, U8, U0, U0>>(24_426);
     }
 
     fn test_election_post_circuit<Tree: 'static + MerkleTreeTrait>(expected_constraints: usize) {
@@ -223,7 +223,8 @@ mod tests {
         let mut sectors: Vec<SectorId> = Vec::new();
         let mut trees = BTreeMap::new();
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        // Construct and store an MT using a named store.
+        let temp_dir = tempdir::TempDir::new("tree").unwrap();
         let temp_path = temp_dir.path();
 
         for i in 0..5 {
@@ -296,7 +297,7 @@ mod tests {
             comm_r: Some(comm_r.into()),
             comm_c: Some(comm_c.into()),
             comm_r_last: Some(comm_r_last.into()),
-            partial_ticket: Some(candidate.partial_ticket),
+            partial_ticket: Some(candidate.partial_ticket.into()),
             randomness: Some(randomness.into()),
             prover_id: Some(prover_id.into()),
             sector_id: Some(candidate.sector_id.into()),

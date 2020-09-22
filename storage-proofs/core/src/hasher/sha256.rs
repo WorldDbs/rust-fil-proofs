@@ -47,7 +47,7 @@ pub struct Sha256Function(Sha256);
 impl StdHasher for Sha256Function {
     #[inline]
     fn write(&mut self, msg: &[u8]) {
-        self.0.update(msg)
+        self.0.input(msg)
     }
 
     #[inline]
@@ -72,7 +72,7 @@ impl AsRef<Sha256Domain> for Sha256Domain {
 }
 
 impl Sha256Domain {
-    fn trim_to_fr32(&mut self) {
+    pub fn trim_to_fr32(&mut self) {
         // strip last two bits, to ensure result is in Fr.
         self.0[31] &= 0b0011_1111;
     }
@@ -93,9 +93,7 @@ impl Hashable<Sha256Function> for Sha256Domain {
 impl From<Fr> for Sha256Domain {
     fn from(val: Fr) -> Self {
         let mut res = Self::default();
-        val.into_repr()
-            .write_le(&mut res.0[0..32])
-            .expect("write_le failure");
+        val.into_repr().write_le(&mut res.0[0..32]).unwrap();
 
         res
     }
@@ -104,7 +102,7 @@ impl From<Fr> for Sha256Domain {
 impl From<FrRepr> for Sha256Domain {
     fn from(val: FrRepr) -> Self {
         let mut res = Self::default();
-        val.write_le(&mut res.0[0..32]).expect("write_le failure");
+        val.write_le(&mut res.0[0..32]).unwrap();
 
         res
     }
@@ -113,9 +111,9 @@ impl From<FrRepr> for Sha256Domain {
 impl From<Sha256Domain> for Fr {
     fn from(val: Sha256Domain) -> Self {
         let mut res = FrRepr::default();
-        res.read_le(&val.0[0..32]).expect("read_le failure");
+        res.read_le(&val.0[0..32]).unwrap();
 
-        Fr::from_repr(res).expect("from_repr failure")
+        Fr::from_repr(res).unwrap()
     }
 }
 
@@ -149,6 +147,10 @@ impl Domain for Sha256Domain {
         // generating an Fr and converting it, to ensure we stay in the field
         Fr::random(rng).into()
     }
+
+    fn into_repr(self) -> FrRepr {
+        crate::fr32::bytes_into_fr_repr_safe(&self.0)
+    }
 }
 
 impl Element for Sha256Domain {
@@ -181,7 +183,7 @@ impl HashFunction<Sha256Domain> for Sha256Function {
         let hashed = Sha256::new()
             .chain(AsRef::<[u8]>::as_ref(a))
             .chain(AsRef::<[u8]>::as_ref(b))
-            .finalize();
+            .result();
         let mut res = Sha256Domain::default();
         res.0.copy_from_slice(&hashed[..]);
         res.trim_to_fr32();
@@ -305,7 +307,7 @@ impl Algorithm<Sha256Domain> for Sha256Function {
     #[inline]
     fn hash(&mut self) -> Sha256Domain {
         let mut h = [0u8; 32];
-        h.copy_from_slice(self.0.clone().finalize().as_ref());
+        h.copy_from_slice(self.0.clone().result().as_ref());
         let mut dd = Sha256Domain::from(h);
         dd.trim_to_fr32();
         dd
@@ -353,8 +355,8 @@ mod tests {
     use super::*;
 
     use crate::fr32::fr_into_bytes;
+    use crate::gadgets::TestConstraintSystem;
     use crate::util::bytes_into_boolean_vec;
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
 
     use bellperson::gadgets::boolean::Boolean;
     use bellperson::ConstraintSystem;
@@ -377,13 +379,12 @@ mod tests {
 
         let left_bits: Vec<Boolean> = {
             let mut cs = cs.namespace(|| "left");
-            bytes_into_boolean_vec(&mut cs, Some(left.as_slice()), 256).expect("left bits failure")
+            bytes_into_boolean_vec(&mut cs, Some(left.as_slice()), 256).unwrap()
         };
 
         let right_bits: Vec<Boolean> = {
             let mut cs = cs.namespace(|| "right");
-            bytes_into_boolean_vec(&mut cs, Some(right.as_slice()), 256)
-                .expect("right bits failure")
+            bytes_into_boolean_vec(&mut cs, Some(right.as_slice()), 256).unwrap()
         };
 
         let out = Sha256Function::hash_leaf_bits_circuit(
@@ -403,7 +404,7 @@ mod tests {
 
         assert_eq!(
             expected,
-            out.get_value().expect("get_value failure"),
+            out.get_value().unwrap(),
             "circuit and non circuit do not match"
         );
     }
