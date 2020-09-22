@@ -1,4 +1,3 @@
-use log::trace;
 use std::marker::PhantomData;
 
 use paired::bls12_381::Fr;
@@ -11,16 +10,14 @@ use crate::encode::encode;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncodingProof<H: Hasher> {
     pub(crate) parents: Vec<H::Domain>,
-    pub(crate) layer_index: u32,
     pub(crate) node: u64,
     #[serde(skip)]
     _h: PhantomData<H>,
 }
 
 impl<H: Hasher> EncodingProof<H> {
-    pub fn new(layer_index: u32, node: u64, parents: Vec<H::Domain>) -> Self {
+    pub fn new(node: u64, parents: Vec<H::Domain>) -> Self {
         EncodingProof {
-            layer_index,
             node,
             parents,
             _h: PhantomData,
@@ -34,19 +31,17 @@ impl<H: Hasher> EncodingProof<H> {
         // replica_id
         buffer[..32].copy_from_slice(AsRef::<[u8]>::as_ref(replica_id));
 
-        // layer index
-        buffer[32..36].copy_from_slice(&(self.layer_index as u32).to_be_bytes());
         // node id
-        buffer[36..44].copy_from_slice(&(self.node as u64).to_be_bytes());
+        buffer[32..40].copy_from_slice(&(self.node as u64).to_be_bytes());
 
-        hasher.update(&buffer[..]);
+        hasher.input(&buffer[..]);
 
         // parents
         for parent in &self.parents {
-            hasher.update(AsRef::<[u8]>::as_ref(parent));
+            hasher.input(AsRef::<[u8]>::as_ref(parent));
         }
 
-        bytes_into_fr_repr_safe(hasher.finalize().as_ref()).into()
+        bytes_into_fr_repr_safe(hasher.result().as_ref()).into()
     }
 
     pub fn verify<G: Hasher>(
