@@ -2,7 +2,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Parameter
 use storage_proofs_core::drgraph::*;
 use storage_proofs_core::hasher::pedersen::*;
 
-#[allow(clippy::unit_arg)]
 fn drgraph(c: &mut Criterion) {
     let params = vec![12, 24, 128, 1024];
 
@@ -12,7 +11,7 @@ fn drgraph(c: &mut Criterion) {
             "bucket/m=6",
             |b, n| {
                 let graph =
-                    BucketGraph::<PedersenHasher>::new(*n, BASE_DEGREE, 0, [32; 32]).unwrap();
+                    BucketGraph::<PedersenHasher>::new(*n, BASE_DEGREE, 0, new_seed()).unwrap();
 
                 b.iter(|| {
                     let mut parents = vec![0; 6];

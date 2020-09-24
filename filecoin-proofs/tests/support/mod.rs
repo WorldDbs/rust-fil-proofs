@@ -2,10 +2,9 @@ use std::path::{Path, PathBuf};
 use std::{env, thread};
 
 use failure::format_err;
-use rexpect::session::PtyReplSession;
+use filecoin_proofs::param::ParameterData;
+use rexpect::session::PtyBashSession;
 use rexpect::spawn_bash;
-use storage_proofs::parameter_cache::ParameterData;
-
 use std::collections::btree_map::BTreeMap;
 use std::fs::File;
 use std::process::Command;
@@ -55,7 +54,7 @@ pub fn target_dir() -> PathBuf {
             }
             path
         })
-        .expect("failed to get current exe path")
+        .unwrap()
 }
 
 /// Look up the path to a cargo-built binary within an integration test.
@@ -67,7 +66,7 @@ pub fn cargo_bin<S: AsRef<str>>(name: S) -> PathBuf {
 pub fn spawn_bash_with_retries(
     retries: u8,
     timeout: Option<u64>,
-) -> Result<PtyReplSession, rexpect::errors::Error> {
+) -> Result<PtyBashSession, rexpect::errors::Error> {
     let result = spawn_bash(timeout);
     if result.is_ok() || retries == 0 {
         result
