@@ -119,7 +119,7 @@ pub fn difference<E: Engine, A, AR, CS: ConstraintSystem<E>>(
 mod tests {
     use super::*;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
+    use crate::gadgets::TestConstraintSystem;
     use paired::bls12_381::{Bls12, Fr};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
@@ -136,7 +136,7 @@ mod tests {
 
             let res = add(cs.namespace(|| "a+b"), &a, &b).expect("add failed");
 
-            let mut tmp = a.get_value().unwrap();
+            let mut tmp = a.get_value().unwrap().clone();
             tmp.add_assign(&b.get_value().unwrap());
 
             assert_eq!(res.get_value().unwrap(), tmp);
@@ -156,7 +156,7 @@ mod tests {
 
             let res = sub(cs.namespace(|| "a-b"), &a, &b).expect("subtraction failed");
 
-            let mut tmp = a.get_value().unwrap();
+            let mut tmp = a.get_value().unwrap().clone();
             tmp.sub_assign(&b.get_value().unwrap());
 
             assert_eq!(res.get_value().unwrap(), tmp);
