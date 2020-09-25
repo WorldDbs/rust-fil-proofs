@@ -578,7 +578,7 @@ impl<H: Hasher, Arity: 'static + PoseidonArity, SubTreeArity: 'static + Poseidon
             p.sub_tree_proof.is_some(),
             "Cannot generate sub proof without a base-proof"
         );
-        let base_p = p.sub_tree_proof.as_ref().expect("proof as_ref failure");
+        let base_p = p.sub_tree_proof.as_ref().unwrap();
 
         // Generate SubProof
         let root = p.root();
@@ -649,16 +649,13 @@ impl<
             p.sub_tree_proof.is_some(),
             "Cannot generate top proof without a sub-proof"
         );
-        let sub_p = p.sub_tree_proof.as_ref().expect("proofs as ref failure");
+        let sub_p = p.sub_tree_proof.as_ref().unwrap();
 
         ensure!(
             sub_p.sub_tree_proof.is_some(),
             "Cannot generate top proof without a base-proof"
         );
-        let base_p = sub_p
-            .sub_tree_proof
-            .as_ref()
-            .expect("proofs as ref failure");
+        let base_p = sub_p.sub_tree_proof.as_ref().unwrap();
 
         let root = p.root();
         let leaf = base_p.item();
@@ -721,6 +718,7 @@ mod tests {
     use super::super::*;
 
     use generic_array::typenum;
+    use rand;
 
     use crate::hasher::{Blake2sHasher, Domain, PedersenHasher, PoseidonHasher, Sha256Hasher};
     use crate::merkle::{generate_tree, MerkleProofTrait};
@@ -733,7 +731,7 @@ mod tests {
         let (data, tree) = generate_tree::<Tree, _>(&mut rng, nodes, None);
 
         for i in 0..nodes {
-            let proof = tree.gen_proof(i).expect("gen_proof failure");
+            let proof = tree.gen_proof(i).unwrap();
 
             assert!(proof.verify(), "failed to validate");
 
@@ -741,8 +739,7 @@ mod tests {
             let data_slice = &data[i * node_size..(i + 1) * node_size].to_vec();
             assert!(
                 proof.validate_data(
-                    <Tree::Hasher as Hasher>::Domain::try_from_bytes(data_slice)
-                        .expect("try from bytes failure")
+                    <Tree::Hasher as Hasher>::Domain::try_from_bytes(data_slice).unwrap()
                 ),
                 "failed to validate valid data"
             );
