@@ -7,6 +7,7 @@ pub enum CacheKey {
     CommDTree,
     CommCTree,
     CommRLastTree,
+    LabelLayer,
 }
 
 impl fmt::Display for CacheKey {
@@ -17,6 +18,7 @@ impl fmt::Display for CacheKey {
             CacheKey::CommDTree => write!(f, "tree-d"),
             CacheKey::CommCTree => write!(f, "tree-c"),
             CacheKey::CommRLastTree => write!(f, "tree-r-last"),
+            CacheKey::LabelLayer => write!(f, "label-layer"),
         }
     }
 }
@@ -24,5 +26,9 @@ impl fmt::Display for CacheKey {
 impl CacheKey {
     pub fn label_layer(layer: usize) -> String {
         format!("layer-{}", layer)
+    }
+
+    pub fn label_layer_with_window(layer: u32, window: u32) -> String {
+        format!("layer-{}-window-{}", layer, window)
     }
 }
