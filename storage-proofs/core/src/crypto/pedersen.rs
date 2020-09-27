@@ -1,19 +1,19 @@
 use anyhow::{ensure, Context};
 use ff::PrimeFieldRepr;
 use fil_sapling_crypto::jubjub::JubjubBls12;
+use fil_sapling_crypto::pedersen_hash::Personalization;
 use lazy_static::lazy_static;
-use paired::bls12_381::{Fr, FrRepr};
+use paired::bls12_381::{Bls12, Fr, FrRepr};
 
 use crate::error::Result;
 use crate::fr32::bytes_into_frs;
-use crate::hasher::pedersen::pedersen_hash;
 use crate::settings;
 
 lazy_static! {
     pub static ref JJ_PARAMS: JubjubBls12 = JubjubBls12::new_with_window_size(
         settings::SETTINGS
             .lock()
-            .expect("settings lock failure")
+            .unwrap()
             .pedersen_hash_exp_window_size
     );
 }
@@ -26,7 +26,14 @@ pub fn pedersen(data: &[u8]) -> Fr {
 }
 
 pub fn pedersen_bits<'a, S: Iterator<Item = &'a [u8]>>(data: Bits<&'a [u8], S>) -> Fr {
-    let digest = pedersen_hash(data);
+    let digest = if cfg!(target_arch = "x86_64") {
+        use fil_sapling_crypto::pedersen_hash::pedersen_hash_bls12_381_with_precomp;
+        pedersen_hash_bls12_381_with_precomp::<_>(Personalization::None, data, &JJ_PARAMS)
+    } else {
+        use fil_sapling_crypto::pedersen_hash::pedersen_hash;
+        pedersen_hash::<Bls12, _>(Personalization::None, data, &JJ_PARAMS)
+    };
+
     digest.into_xy().0
 }
 
@@ -63,7 +70,14 @@ fn pedersen_compression_bits<T>(bits: T) -> FrRepr
 where
     T: IntoIterator<Item = bool>,
 {
-    let digest = pedersen_hash(bits);
+    let digest = if cfg!(target_arch = "x86_64") {
+        use fil_sapling_crypto::pedersen_hash::pedersen_hash_bls12_381_with_precomp;
+        pedersen_hash_bls12_381_with_precomp::<_>(Personalization::None, bits, &JJ_PARAMS)
+    } else {
+        use fil_sapling_crypto::pedersen_hash::pedersen_hash;
+        pedersen_hash::<Bls12, _>(Personalization::None, bits, &JJ_PARAMS)
+    };
+
     digest.into_xy().0.into()
 }
 
@@ -318,7 +332,7 @@ mod tests {
 
         let x = pedersen_compression_bits(bytes);
         let mut data = Vec::new();
-        x.write_le(&mut data).expect("write_le failure");
+        x.write_le(&mut data).unwrap();
 
         let expected = vec![
             237, 70, 41, 231, 39, 180, 131, 120, 36, 36, 119, 199, 200, 225, 153, 242, 106, 116,
@@ -390,12 +404,12 @@ mod tests {
             let flat: Vec<u8> = x.iter().flatten().copied().collect();
             let hashed = pedersen_md_no_padding(&flat);
 
-            let mut hasher = Hasher::new(&x[0]).expect("hasher new failure");
-            for val in x.iter().skip(1).take(4) {
-                hasher.update(&val).expect("hasher update failure");
+            let mut hasher = Hasher::new(&x[0]).unwrap();
+            for k in 1..5 {
+                hasher.update(&x[k]).unwrap();
             }
 
-            let hasher_final = hasher.finalize().expect("hasher finalize failure");
+            let hasher_final = hasher.finalize().unwrap();
 
             assert_eq!(hashed, hasher_final);
         }
