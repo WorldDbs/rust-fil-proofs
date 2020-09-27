@@ -15,14 +15,15 @@ use itertools::Itertools;
 use filecoin_proofs::param::{
     add_extension, choose_from, filename_to_parameter_id, get_digest_for_file_within_cache,
     get_full_path_for_file_within_cache, has_extension, parameter_id_to_metadata_map,
+    ParameterData, ParameterMap,
 };
 use filecoin_proofs::{
     SECTOR_SIZE_2_KIB, SECTOR_SIZE_32_GIB, SECTOR_SIZE_512_MIB, SECTOR_SIZE_64_GIB,
     SECTOR_SIZE_8_MIB,
 };
 use storage_proofs::parameter_cache::{
-    parameter_cache_dir, parameter_cache_dir_name, CacheEntryMetadata, ParameterData, ParameterMap,
-    GROTH_PARAMETER_EXT, PARAMETER_METADATA_EXT, VERIFYING_KEY_EXT,
+    parameter_cache_dir, CacheEntryMetadata, GROTH_PARAMETER_EXT, PARAMETER_CACHE_DIR,
+    PARAMETER_METADATA_EXT, VERIFYING_KEY_EXT,
 };
 
 const ERROR_IPFS_COMMAND: &str = "failed to run ipfs";
@@ -46,7 +47,7 @@ pub fn main() {
 Set $FIL_PROOFS_PARAMETER_CACHE to specify parameter directory.
 Defaults to '{}'
 ",
-                parameter_cache_dir_name()
+                PARAMETER_CACHE_DIR
             )[..],
         )
         .arg(
@@ -98,12 +99,9 @@ fn publish(matches: &ArgMatches) -> Result<()> {
         .fold(
             (Vec::new(), 0),
             |(mut result, mut counter): (std::vec::Vec<String>, u8), filename| {
-                let parameter_id =
-                    filename_to_parameter_id(&filename).expect("failed to get paramater id");
+                let parameter_id = filename_to_parameter_id(&filename).unwrap();
                 // Check if previous file had the same parameter ID
-                if !result.is_empty()
-                    && &parameter_id == result.last().expect("unreachable: is_empty()")
-                {
+                if !result.is_empty() && &parameter_id == result.last().unwrap() {
                     counter += 1;
                 } else {
                     // There weren't three files for the same parameter ID, hence remove it from
@@ -157,13 +155,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
         let versions: Vec<String> = meta_map
             .keys()
             // Split off the version of the parameters
-            .map(|parameter_id| {
-                parameter_id
-                    .split('-')
-                    .next()
-                    .expect("paramater id to contain a '-'")
-                    .to_string()
-            })
+            .map(|parameter_id| parameter_id.split('-').next().unwrap().to_string())
             // Sort by descending order, newest parameter first
             .sorted_by(|a, b| Ord::cmp(&b, &a))
             .dedup()
@@ -173,7 +165,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
             .default(0)
             .items(&versions[..])
             .interact_opt()
-            .expect("interact_opt failed");
+            .unwrap();
         let version = match selected_version {
             Some(index) => &versions[index],
             None => {
@@ -182,7 +174,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
             }
         };
 
-        // The parameter IDs that should be published
+        // The parameter IDs that should bet published
         let mut parameter_ids = meta_map
             .keys()
             // Filter out all that don't match the selected version
@@ -197,7 +189,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
                 meta_map
                     .get(parameter_id)
                     .map(|x| (x.sector_size, parameter_id))
-                    .expect("unreachable: key came from map")
+                    .unwrap()
             })
             // Sort it ascending by sector size
             .sorted_by(|a, b| Ord::cmp(&a.0, &b.0));
@@ -215,9 +207,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
             .map(|(sector_size, parameter_id)| {
                 format!(
                     "({:?}) {:?}",
-                    sector_size
-                        .file_size(file_size_opts::BINARY)
-                        .expect("failed to format sector_size"),
+                    sector_size.file_size(file_size_opts::BINARY).unwrap(),
                     parameter_id
                 )
             })
@@ -231,7 +221,7 @@ fn publish(matches: &ArgMatches) -> Result<()> {
             .items(&sector_sizes[..])
             .defaults(&default_sector_sizes)
             .interact()
-            .expect("interaction failed");
+            .unwrap();
 
         if selected_sector_sizes.is_empty() {
             println!("Nothing selected. Abort.");
@@ -280,13 +270,13 @@ fn publish(matches: &ArgMatches) -> Result<()> {
 
             println!("publishing: {}", filename);
             print!("publishing to ipfs... ");
-            io::stdout().flush().expect("failed to flush stdout");
+            io::stdout().flush().unwrap();
 
             match publish_parameter_file(&ipfs_bin_path, &filename) {
                 Ok(cid) => {
                     println!("ok");
                     print!("generating digest... ");
-                    io::stdout().flush().expect("failed to flush stdout");
+                    io::stdout().flush().unwrap();
 
                     let digest = get_digest_for_file_within_cache(&filename)?;
                     let data = ParameterData {
@@ -318,23 +308,21 @@ fn get_filenames_in_cache_dir() -> Result<Vec<String>> {
 
     if path.exists() {
         Ok(read_dir(path)?
-            .map(|f| f.expect("failed to get directory entry").path())
+            .map(|f| f.unwrap().path())
             .filter(|p| p.is_file())
             .map(|p| {
                 p.as_path()
                     .file_name()
-                    .expect("failed to get file name from path")
+                    .unwrap()
                     .to_str()
-                    .expect("failed to get valid Unicode filename")
+                    .unwrap()
                     .to_string()
             })
             .collect())
     } else {
         println!(
             "parameter directory '{}' does not exist",
-            path.as_path()
-                .to_str()
-                .expect("failed to get valid Unicode path")
+            path.as_path().to_str().unwrap()
         );
 
         Ok(Vec::new())
