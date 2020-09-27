@@ -3,7 +3,6 @@ use std::time::Duration;
 use std::{io, u32};
 
 use anyhow::bail;
-use bellperson::util_cs::bench_cs::BenchCS;
 use bellperson::Circuit;
 use chrono::Utc;
 use log::info;
@@ -16,6 +15,7 @@ use fil_proofs_tooling::{measure, FuncMeasurement, Metadata};
 use storage_proofs::cache_key::CacheKey;
 use storage_proofs::compound_proof::{self, CompoundProof};
 use storage_proofs::drgraph::*;
+use storage_proofs::gadgets::BenchCS;
 use storage_proofs::hasher::{Blake2sHasher, Domain, Hasher, PedersenHasher, Sha256Hasher};
 use storage_proofs::merkle::{BinaryMerkleTree, MerkleTreeTrait};
 use storage_proofs::porep::stacked::StackedCompound;
@@ -26,7 +26,6 @@ use storage_proofs::porep::stacked::{
 use storage_proofs::porep::PoRep;
 use storage_proofs::proof::ProofScheme;
 use storage_proofs::test_helper::setup_replica;
-use storage_proofs::util::default_rows_to_discard;
 use tempfile::TempDir;
 
 fn dump_proof_bytes<Tree: MerkleTreeTrait>(
@@ -117,16 +116,15 @@ where
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            default_rows_to_discard(nodes, BINARY_ARITY),
+            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         let replica_id = H::Domain::random(rng);
-        let arbitrary_porep_id = [11; 32];
         let sp = stacked::SetupParams {
             nodes,
             degree: BASE_DEGREE,
             expansion_degree: EXP_DEGREE,
-            porep_id: arbitrary_porep_id,
+            seed: new_seed(),
             layer_challenges: layer_challenges.clone(),
         };
 
