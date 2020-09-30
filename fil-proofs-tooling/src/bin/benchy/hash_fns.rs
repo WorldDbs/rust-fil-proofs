@@ -1,5 +1,4 @@
 use bellperson::gadgets::boolean::Boolean;
-use bellperson::util_cs::test_cs::TestConstraintSystem;
 use bellperson::ConstraintSystem;
 use fil_proofs_tooling::metadata::Metadata;
 use paired::bls12_381::Bls12;
@@ -7,6 +6,7 @@ use rand::RngCore;
 use serde::Serialize;
 use storage_proofs::crypto;
 use storage_proofs::gadgets::pedersen::{pedersen_compression_num, pedersen_md_no_padding};
+use storage_proofs::gadgets::TestConstraintSystem;
 use storage_proofs::util::{bits_to_bytes, bytes_into_boolean_vec, bytes_into_boolean_vec_be};
 
 fn blake2s_count(bytes: usize) -> anyhow::Result<Report> {
@@ -18,15 +18,14 @@ fn blake2s_count(bytes: usize) -> anyhow::Result<Report> {
 
     let data_bits: Vec<Boolean> = {
         let mut cs = cs.namespace(|| "data");
-        bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len())
-            .expect("failed to convert to boolean vector")
+        bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len()).unwrap()
     };
 
     let personalization = vec![0u8; 8];
     let out: Vec<bool> =
         bellperson::gadgets::blake2s::blake2s(&mut cs, &data_bits, &personalization)?
             .into_iter()
-            .map(|b| b.get_value().expect("failed to get bool value"))
+            .map(|b| b.get_value().unwrap())
             .collect();
 
     assert!(cs.is_satisfied(), "constraints not satisfied");
@@ -54,13 +53,12 @@ fn sha256_count(bytes: usize) -> anyhow::Result<Report> {
 
     let data_bits: Vec<Boolean> = {
         let mut cs = cs.namespace(|| "data");
-        bytes_into_boolean_vec_be(&mut cs, Some(data.as_slice()), data.len())
-            .expect("failed to convert bytes into boolean vector big endian")
+        bytes_into_boolean_vec_be(&mut cs, Some(data.as_slice()), data.len()).unwrap()
     };
 
     let _out: Vec<bool> = bellperson::gadgets::sha256::sha256(&mut cs, &data_bits)?
         .into_iter()
-        .map(|b| b.get_value().expect("failed to get bool value"))
+        .map(|b| b.get_value().unwrap())
         .collect();
 
     assert!(cs.is_satisfied(), "constraints not satisfied");
@@ -81,8 +79,7 @@ fn pedersen_count(bytes: usize) -> anyhow::Result<Report> {
 
     let data_bits: Vec<Boolean> = {
         let mut cs = cs.namespace(|| "data");
-        bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len())
-            .expect("failed to convert bytes into boolean vector")
+        bytes_into_boolean_vec(&mut cs, Some(data.as_slice()), data.len()).unwrap()
     };
 
     if bytes < 128 {
@@ -92,8 +89,7 @@ fn pedersen_count(bytes: usize) -> anyhow::Result<Report> {
         let expected = crypto::pedersen::pedersen(data.as_slice());
         assert_eq!(
             expected,
-            out.get_value()
-                .expect("failed to get value from pedersen num"),
+            out.get_value().unwrap(),
             "circuit and non circuit do not match"
         );
     } else {
@@ -103,8 +99,7 @@ fn pedersen_count(bytes: usize) -> anyhow::Result<Report> {
         let expected = crypto::pedersen::pedersen_md_no_padding(data.as_slice());
         assert_eq!(
             expected,
-            out.get_value()
-                .expect("failed to get value from pedersen md"),
+            out.get_value().unwrap(),
             "circuit and non circuit do not match"
         );
     }
