@@ -625,11 +625,11 @@ pub fn extract_bits_and_shift(
 
     // (3).
     if new_offset != 0 {
-        clear_right_bits(output.first_mut().expect("output is empty"), new_offset);
+        clear_right_bits(output.first_mut().unwrap(), new_offset);
     }
     let end_offset = (new_offset + num_bits) % 8;
     if end_offset != 0 {
-        clear_left_bits(output.last_mut().expect("output is empty"), end_offset);
+        clear_left_bits(output.last_mut().unwrap(), end_offset);
     }
 
     output
@@ -824,8 +824,7 @@ where
             // `recovered` in this iteration. Since `extract_bits_and_shift` already
             // takes care of setting to zero the bits beyond the extraction limit we
             // can just `OR` the two.
-            *(raw_data.last_mut().expect("raw_data is empty")) |=
-                *(recovered.first().expect("recovered is empty"));
+            *(raw_data.last_mut().unwrap()) |= *(recovered.first().unwrap());
             raw_data.append(&mut recovered[1..].to_vec());
         } else {
             raw_data.append(&mut recovered);
@@ -949,7 +948,7 @@ mod tests {
             .chunks(FR32_PADDING_MAP.data_bits)
             .into_iter()
         {
-            padded_data.extend(data_unit);
+            padded_data.extend(data_unit.into_iter());
 
             // To avoid reconverting the iterator, we deduce if we need the padding
             // by the length of `padded_data`: a full data unit would not leave the
@@ -972,9 +971,7 @@ mod tests {
         let data = vec![255u8; len];
         let mut padded = Vec::new();
         let mut reader = crate::fr32_reader::Fr32Reader::new(io::Cursor::new(&data));
-        reader
-            .read_to_end(&mut padded)
-            .expect("in-memory read failed");
+        reader.read_to_end(&mut padded).unwrap();
 
         assert_eq!(
             padded.len(),
@@ -982,8 +979,7 @@ mod tests {
         );
 
         let mut unpadded = Vec::new();
-        let unpadded_written =
-            write_unpadded(&padded, &mut unpadded, 0, len).expect("un-padded write failed");
+        let unpadded_written = write_unpadded(&padded, &mut unpadded, 0, len).unwrap();
         assert_eq!(unpadded_written, len);
         assert_eq!(data, unpadded);
         assert_eq!(padded.into_boxed_slice(), bit_vec_padding(data));
@@ -1000,13 +996,11 @@ mod tests {
 
         let mut padded = Vec::new();
         let mut reader = crate::fr32_reader::Fr32Reader::new(io::Cursor::new(&data));
-        reader
-            .read_to_end(&mut padded)
-            .expect("in-memory read failed");
+        reader.read_to_end(&mut padded).unwrap();
 
         {
             let mut unpadded = Vec::new();
-            write_unpadded(&padded, &mut unpadded, 0, 1016).expect("un-padded write failed: 1016");
+            write_unpadded(&padded, &mut unpadded, 0, 1016).unwrap();
             let expected = &data[0..1016];
 
             assert_eq!(expected.len(), unpadded.len());
@@ -1015,7 +1009,7 @@ mod tests {
 
         {
             let mut unpadded = Vec::new();
-            write_unpadded(&padded, &mut unpadded, 0, 44).expect("un-padded write failed: 44");
+            write_unpadded(&padded, &mut unpadded, 0, 44).unwrap();
             let expected = &data[0..44];
 
             assert_eq!(expected.len(), unpadded.len());
