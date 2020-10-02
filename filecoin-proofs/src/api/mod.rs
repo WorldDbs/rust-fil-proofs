@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use bincode::deserialize;
-use log::info;
 use merkletree::store::{DiskStore, LevelCacheStore, StoreConfig};
 use storage_proofs::cache_key::CacheKey;
 use storage_proofs::hasher::Hasher;
@@ -15,7 +14,6 @@ use storage_proofs::porep::stacked::{
 };
 use storage_proofs::porep::PoRep;
 use storage_proofs::sector::SectorId;
-use storage_proofs::util::default_rows_to_discard;
 use typenum::Unsigned;
 
 use crate::api::util::{as_safe_commitment, get_base_tree_leafs, get_base_tree_size};
@@ -70,8 +68,6 @@ pub fn get_unsealed_range<T: Into<PathBuf> + AsRef<Path>, Tree: 'static + Merkle
     offset: UnpaddedByteIndex,
     num_bytes: UnpaddedBytesAmount,
 ) -> Result<UnpaddedBytesAmount> {
-    info!("get_unsealed_range:start");
-
     let f_in = File::open(&sealed_path)
         .with_context(|| format!("could not open sealed_path={:?}", sealed_path.as_ref()))?;
 
@@ -80,7 +76,7 @@ pub fn get_unsealed_range<T: Into<PathBuf> + AsRef<Path>, Tree: 'static + Merkle
 
     let buf_f_out = BufWriter::new(f_out);
 
-    let result = unseal_range::<_, _, _, Tree>(
+    unseal_range::<_, _, _, Tree>(
         porep_config,
         cache_path,
         f_in,
@@ -91,10 +87,7 @@ pub fn get_unsealed_range<T: Into<PathBuf> + AsRef<Path>, Tree: 'static + Merkle
         ticket,
         offset,
         num_bytes,
-    );
-
-    info!("get_unsealed_range:finish");
-    result
+    )
 }
 
 /// Unseals the sector read from `sealed_sector` and returns the bytes for a
@@ -133,19 +126,13 @@ where
     W: Write,
     Tree: 'static + MerkleTreeTrait,
 {
-    info!("unseal_range:start");
     ensure!(comm_d != [0; 32], "Invalid all zero commitment (comm_d)");
 
     let comm_d =
         as_safe_commitment::<<DefaultPieceHasher as Hasher>::Domain, _>(&comm_d, "comm_d")?;
 
-    let replica_id = generate_replica_id::<Tree::Hasher, _>(
-        &prover_id,
-        sector_id.into(),
-        &ticket,
-        comm_d,
-        &porep_config.porep_id,
-    );
+    let replica_id =
+        generate_replica_id::<Tree::Hasher, _>(&prover_id, sector_id.into(), &ticket, comm_d);
 
     let mut data = Vec::new();
     sealed_sector.read_to_end(&mut data)?;
@@ -157,7 +144,7 @@ where
     let config = StoreConfig::new(
         cache_path.as_ref(),
         CacheKey::CommDTree.to_string(),
-        default_rows_to_discard(
+        StoreConfig::default_rows_to_discard(
             base_tree_leafs,
             <DefaultBinaryTree as MerkleTreeTrait>::Arity::to_usize(),
         ),
@@ -165,7 +152,6 @@ where
     let pp = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
-        porep_config.porep_id,
     )?;
 
     let offset_padded: PaddedBytesAmount = UnpaddedBytesAmount::from(offset).into();
@@ -183,10 +169,7 @@ where
     let written = write_unpadded(unsealed, &mut unsealed_output, 0, num_bytes.into())
         .context("write_unpadded failed")?;
 
-    let amount = UnpaddedBytesAmount(written as u64);
-
-    info!("unseal_range:finish");
-    Ok(amount)
+    Ok(UnpaddedBytesAmount(written as u64))
 }
 
 /// Generates a piece commitment for the provided byte source. Returns an error
@@ -201,9 +184,7 @@ pub fn generate_piece_commitment<T: std::io::Read>(
     source: T,
     piece_size: UnpaddedBytesAmount,
 ) -> Result<PieceInfo> {
-    info!("generate_piece_commitment:start");
-
-    let result = measure_op(Operation::GeneratePieceCommitment, || {
+    measure_op(Operation::GeneratePieceCommitment, || {
         ensure_piece_size(piece_size)?;
 
         // send the source through the preprocessor
@@ -216,10 +197,7 @@ pub fn generate_piece_commitment<T: std::io::Read>(
         )?;
 
         PieceInfo::new(commitment, piece_size)
-    });
-
-    info!("generate_piece_commitment:finish");
-    result
+    })
 }
 
 /// Computes a NUL-byte prefix and/or suffix for `source` using the provided
@@ -251,9 +229,7 @@ where
     R: Read,
     W: Write,
 {
-    info!("add_piece:start");
-
-    let result = measure_op(Operation::AddPiece, || {
+    measure_op(Operation::AddPiece, || {
         ensure_piece_size(piece_size)?;
 
         let source = std::io::BufReader::new(source);
@@ -290,10 +266,7 @@ where
         let written = piece_alignment.left_bytes + piece_alignment.right_bytes + piece_size;
 
         Ok((PieceInfo::new(comm, n)?, written))
-    });
-
-    info!("add_piece:finish");
-    result
+    })
 }
 
 fn ensure_piece_size(piece_size: UnpaddedBytesAmount) -> Result<()> {
@@ -345,11 +318,7 @@ fn verify_store(config: &StoreConfig, arity: usize, required_configs: usize) -> 
     if !Path::new(&store_path).exists() {
         // Configs may have split due to sector size, so we need to
         // check deterministic paths from here.
-        let orig_path = store_path
-            .clone()
-            .into_os_string()
-            .into_string()
-            .expect("failed to convert store_path to string");
+        let orig_path = store_path.clone().into_os_string().into_string().unwrap();
         let mut configs: Vec<StoreConfig> = Vec::with_capacity(required_configs);
         for i in 0..required_configs {
             let cur_path = orig_path
@@ -378,7 +347,7 @@ fn verify_store(config: &StoreConfig, arity: usize, required_configs: usize) -> 
             store_path.display()
         );
 
-        let store_len = config.size.expect("disk store size not configured");
+        let store_len = config.size.unwrap();
         for config in &configs {
             ensure!(
                 DiskStore::<DefaultPieceDomain>::is_consistent(store_len, arity, &config,)?,
@@ -388,11 +357,7 @@ fn verify_store(config: &StoreConfig, arity: usize, required_configs: usize) -> 
         }
     } else {
         ensure!(
-            DiskStore::<DefaultPieceDomain>::is_consistent(
-                config.size.expect("disk store size not configured"),
-                arity,
-                &config,
-            )?,
+            DiskStore::<DefaultPieceDomain>::is_consistent(config.size.unwrap(), arity, &config,)?,
             "Store is inconsistent: {:?}",
             store_path
         );
@@ -409,11 +374,7 @@ fn verify_level_cache_store<Tree: MerkleTreeTrait>(config: &StoreConfig) -> Resu
 
         // Configs may have split due to sector size, so we need to
         // check deterministic paths from here.
-        let orig_path = store_path
-            .clone()
-            .into_os_string()
-            .into_string()
-            .expect("failed to convert store_path to string");
+        let orig_path = store_path.clone().into_os_string().into_string().unwrap();
         let mut configs: Vec<StoreConfig> = Vec::with_capacity(required_configs);
         for i in 0..required_configs {
             let cur_path = orig_path
@@ -442,7 +403,7 @@ fn verify_level_cache_store<Tree: MerkleTreeTrait>(config: &StoreConfig) -> Resu
             store_path.display()
         );
 
-        let store_len = config.size.expect("disk store size not configured");
+        let store_len = config.size.unwrap();
         for config in &configs {
             ensure!(
                 LevelCacheStore::<DefaultPieceDomain, std::fs::File>::is_consistent(
@@ -457,7 +418,7 @@ fn verify_level_cache_store<Tree: MerkleTreeTrait>(config: &StoreConfig) -> Resu
     } else {
         ensure!(
             LevelCacheStore::<DefaultPieceDomain, std::fs::File>::is_consistent(
-                config.size.expect("disk store size not configured"),
+                config.size.unwrap(),
                 Tree::Arity::to_usize(),
                 &config,
             )?,
@@ -479,8 +440,6 @@ where
     R: AsRef<Path>,
     T: AsRef<Path>,
 {
-    info!("validate_cache_for_precommit_phase2:start");
-
     ensure!(
         replica_path.as_ref().exists(),
         "Missing replica: {}",
@@ -502,14 +461,11 @@ where
     );
     config.path = cache_path.as_ref().into();
 
-    let result = verify_store(
+    verify_store(
         &config,
         <DefaultBinaryTree as MerkleTreeTrait>::Arity::to_usize(),
         get_base_tree_count::<Tree>(),
-    );
-
-    info!("validate_cache_for_precommit_phase2:finish");
-    result
+    )
 }
 
 // Checks for the existence of the replica data and t_aux, which in
@@ -523,8 +479,6 @@ where
     R: AsRef<Path>,
     T: AsRef<Path>,
 {
-    info!("validate_cache_for_precommit:start");
-
     // Verify that the replica exists and is not empty.
     ensure!(
         replica_path.as_ref().exists(),
@@ -579,7 +533,6 @@ where
     )?;
     verify_level_cache_store::<DefaultOctTree>(&t_aux.tree_r_last_config)?;
 
-    info!("validate_cache_for_precommit:finish");
     Ok(())
 }
 
@@ -606,7 +559,6 @@ mod tests {
         let out = bytes_into_fr(&not_convertible_to_fr_bytes);
         assert!(out.is_err(), "tripwire");
 
-        let arbitrary_porep_id = [87; 32];
         {
             let result = verify_seal::<DefaultOctLCTree>(
                 PoRepConfig {
@@ -614,11 +566,10 @@ mod tests {
                     partitions: PoRepProofPartitions(
                         *POREP_PARTITIONS
                             .read()
-                            .expect("POREP_PARTITIONS poisoned")
+                            .unwrap()
                             .get(&SECTOR_SIZE_2_KIB)
-                            .expect("unknown sector size"),
+                            .unwrap(),
                     ),
-                    porep_id: arbitrary_porep_id,
                 },
                 not_convertible_to_fr_bytes,
                 convertible_to_fr_bytes,
@@ -649,11 +600,10 @@ mod tests {
                     partitions: PoRepProofPartitions(
                         *POREP_PARTITIONS
                             .read()
-                            .expect("POREP_PARTITIONS poisoned")
+                            .unwrap()
                             .get(&SECTOR_SIZE_2_KIB)
-                            .expect("unknown sector size"),
+                            .unwrap(),
                     ),
-                    porep_id: arbitrary_porep_id,
                 },
                 convertible_to_fr_bytes,
                 not_convertible_to_fr_bytes,
@@ -686,8 +636,7 @@ mod tests {
             let random_el: DefaultTreeDomain = Fr::random(rng).into();
             let mut randomness = [0u8; 32];
             randomness.copy_from_slice(AsRef::<[u8]>::as_ref(&random_el));
-            let back: DefaultTreeDomain = as_safe_commitment(&randomness, "test")
-                .expect("failed to get domain from randomness");
+            let back: DefaultTreeDomain = as_safe_commitment(&randomness, "test").unwrap();
             assert_eq!(back, random_el);
         }
     }

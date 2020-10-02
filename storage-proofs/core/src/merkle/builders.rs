@@ -13,7 +13,7 @@ use rayon::prelude::*;
 
 use crate::error::*;
 use crate::hasher::{Domain, Hasher, PoseidonArity};
-use crate::util::{data_at_node, default_rows_to_discard, NODE_SIZE};
+use crate::util::{data_at_node, NODE_SIZE};
 
 use super::*;
 
@@ -117,7 +117,7 @@ where
                 replica_config.is_some(),
                 "Cannot create LCTree without replica paths"
             );
-            let replica_config = replica_config.expect("replica config failure");
+            let replica_config = replica_config.unwrap();
             lc_store.set_external_reader(ExternalReader::new_from_config(&replica_config, i)?)?;
         }
 
@@ -409,16 +409,16 @@ where
         let config = StoreConfig::new(
             &temp_path,
             format!("test-lc-tree-{}", id),
-            default_rows_to_discard(nodes, Tree::Arity::to_usize()),
+            StoreConfig::default_rows_to_discard(nodes, Tree::Arity::to_usize()),
         );
 
         let mut tree =
             MerkleTreeWrapper::try_from_iter_with_config(elements.iter().map(|v| (Ok(*v))), config)
-                .expect("try from iter with config failure");
+                .unwrap();
 
         // Write out the replica data.
-        let mut f = std::fs::File::create(&replica_path).expect("replica file create failure");
-        f.write_all(&data).expect("replica file write failure");
+        let mut f = std::fs::File::create(&replica_path).unwrap();
+        f.write_all(&data).unwrap();
 
         {
             // Beware: evil dynamic downcasting RUST MAGIC down below.
@@ -438,9 +438,7 @@ where
                 >,
             >(&mut tree.inner)
             {
-                lc_tree
-                    .set_external_reader_path(&replica_path)
-                    .expect("lc tree set external reader failure");
+                lc_tree.set_external_reader_path(&replica_path).unwrap();
             }
         }
 
@@ -448,8 +446,7 @@ where
     } else {
         (
             data,
-            MerkleTreeWrapper::try_from_iter(elements.iter().map(|v| Ok(*v)))
-                .expect("try from iter map failure"),
+            MerkleTreeWrapper::try_from_iter(elements.iter().map(|v| Ok(*v))).unwrap(),
         )
     }
 }
@@ -476,10 +473,7 @@ where
         data.extend(inner_data);
     }
 
-    (
-        data,
-        MerkleTreeWrapper::from_trees(trees).expect("from trees failure"),
-    )
+    (data, MerkleTreeWrapper::from_trees(trees).unwrap())
 }
 
 /// Only used for testing, but can't cfg-test it as that stops exports.
@@ -517,10 +511,7 @@ where
             sub_trees.push(tree);
             data.extend(inner_data);
         }
-        (
-            data,
-            MerkleTreeWrapper::from_sub_trees(sub_trees).expect("from sub trees failure"),
-        )
+        (data, MerkleTreeWrapper::from_sub_trees(sub_trees).unwrap())
     } else if sub_tree_arity > 0 {
         generate_sub_tree::<R, Tree>(rng, nodes, temp_path)
     } else {
