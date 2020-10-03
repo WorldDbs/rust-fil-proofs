@@ -11,7 +11,6 @@ use crate::types::*;
 pub struct PoRepConfig {
     pub sector_size: SectorSize,
     pub partitions: PoRepProofPartitions,
-    pub porep_id: [u8; 32],
 }
 
 impl From<PoRepConfig> for PaddedBytesAmount {
@@ -48,7 +47,6 @@ impl PoRepConfig {
         let params = crate::parameters::public_params::<Tree>(
             self.sector_size.into(),
             self.partitions.into(),
-            self.porep_id,
         )?;
 
         Ok(
