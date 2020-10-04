@@ -110,9 +110,7 @@ impl Hashable<Blake2sFunction> for Blake2sDomain {
 impl From<Fr> for Blake2sDomain {
     fn from(val: Fr) -> Self {
         let mut res = Self::default();
-        val.into_repr()
-            .write_le(&mut res.0[0..32])
-            .expect("write_le failure");
+        val.into_repr().write_le(&mut res.0[0..32]).unwrap();
 
         res
     }
@@ -121,7 +119,7 @@ impl From<Fr> for Blake2sDomain {
 impl From<FrRepr> for Blake2sDomain {
     fn from(val: FrRepr) -> Self {
         let mut res = Self::default();
-        val.write_le(&mut res.0[0..32]).expect("write_le failure");
+        val.write_le(&mut res.0[0..32]).unwrap();
 
         res
     }
@@ -147,9 +145,9 @@ impl Element for Blake2sDomain {
 impl From<Blake2sDomain> for Fr {
     fn from(val: Blake2sDomain) -> Self {
         let mut res = FrRepr::default();
-        res.read_le(&val.0[0..32]).expect("read_le failure");
+        res.read_le(&val.0[0..32]).unwrap();
 
-        Fr::from_repr(res).expect("from_repr failure")
+        Fr::from_repr(res).unwrap()
     }
 }
 
@@ -178,6 +176,10 @@ impl Domain for Blake2sDomain {
     fn random<R: RngCore>(rng: &mut R) -> Self {
         // generating an Fr and converting it, to ensure we stay in the field
         Fr::random(rng).into()
+    }
+
+    fn into_repr(self) -> FrRepr {
+        crate::fr32::bytes_into_fr_repr_safe(&self.0)
     }
 }
 
