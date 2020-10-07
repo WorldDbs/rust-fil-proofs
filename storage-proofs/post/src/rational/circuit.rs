@@ -116,9 +116,9 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use storage_proofs_core::{
         compound_proof::CompoundProof,
+        gadgets::TestConstraintSystem,
         hasher::{Domain, HashFunction, Hasher, PedersenHasher, PoseidonHasher},
         merkle::{generate_tree, get_base_tree_count, BinaryMerkleTree},
         proof::ProofScheme,
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_rational_post_circuit_poseidon() {
-        test_rational_post_circuit::<BinaryMerkleTree<PoseidonHasher>>(3_770);
+        test_rational_post_circuit::<BinaryMerkleTree<PoseidonHasher>>(3_806);
     }
 
     fn test_rational_post_circuit<Tree: 'static + MerkleTreeTrait>(expected_constraints: usize) {
@@ -150,7 +150,8 @@ mod tests {
             challenges_count,
         };
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        // Construct and store an MT using a named DiskStore.
+        let temp_dir = tempdir::TempDir::new("tree").unwrap();
         let temp_path = temp_dir.path();
 
         let (_data1, tree1) = generate_tree::<Tree, _>(rng, leaves, Some(temp_path.to_path_buf()));

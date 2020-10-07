@@ -1,4 +1,3 @@
-use bellperson::util_cs::bench_cs::BenchCS;
 use bellperson::Circuit;
 use fil_proofs_tooling::shared::{create_replicas, PROVER_ID, RANDOMNESS, TICKET_BYTES};
 use fil_proofs_tooling::{measure, Metadata};
@@ -16,6 +15,7 @@ use rand::SeedableRng;
 use rand_xorshift::XorShiftRng;
 use serde::{Deserialize, Serialize};
 use storage_proofs::compound_proof::CompoundProof;
+use storage_proofs::gadgets::BenchCS;
 use storage_proofs::hasher::Sha256Hasher;
 #[cfg(feature = "measurements")]
 use storage_proofs::measurements::Operation;
@@ -51,7 +51,7 @@ pub struct ProdbenchInputs {
 
 impl ProdbenchInputs {
     pub fn sector_size_bytes(&self) -> u64 {
-        bytefmt::parse(&self.sector_size).expect("failed to parse sector size")
+        bytefmt::parse(&self.sector_size).unwrap()
     }
 }
 
@@ -155,15 +155,15 @@ fn augment_with_op_measurements(mut output: &mut ProdbenchOutputs) {
 fn configure_global_config(inputs: &ProdbenchInputs) {
     filecoin_proofs::constants::LAYERS
         .write()
-        .expect("LAYERS poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.stacked_layers as usize);
     filecoin_proofs::constants::POREP_PARTITIONS
         .write()
-        .expect("POREP_PARTITIONS poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.porep_partitions);
     filecoin_proofs::constants::POREP_MINIMUM_CHALLENGES
         .write()
-        .expect("POREP_MINIMUM_CHALLENGES poisoned")
+        .unwrap()
         .insert(inputs.sector_size_bytes(), inputs.porep_challenges);
 }
 
@@ -179,7 +179,6 @@ pub fn run(
     let mut outputs = ProdbenchOutputs::default();
 
     let sector_size = SectorSize(inputs.sector_size_bytes());
-    let arbitrary_porep_id = [123; 32];
 
     assert!(inputs.num_sectors > 0, "Missing num_sectors");
 
@@ -187,7 +186,6 @@ pub fn run(
         sector_size,
         inputs.num_sectors as usize,
         only_add_piece,
-        arbitrary_porep_id,
     );
 
     if only_add_piece || only_replicate {
@@ -196,7 +194,7 @@ pub fn run(
             .expect("failed to retrieve metadata");
     }
 
-    let (created, replica_measurement) = repls.expect("unreachable: only_add_piece==false");
+    let (created, replica_measurement) = repls.unwrap();
     generate_params(&inputs);
 
     if !skip_seal_proof {
@@ -272,6 +270,7 @@ fn run_measure_circuits(i: &ProdbenchInputs) -> CircuitOutputs {
 }
 
 fn measure_porep_circuit(i: &ProdbenchInputs) -> usize {
+    use storage_proofs::drgraph::new_seed;
     use storage_proofs::porep::stacked::{
         LayerChallenges, SetupParams, StackedCompound, StackedDrg,
     };
@@ -283,23 +282,22 @@ fn measure_porep_circuit(i: &ProdbenchInputs) -> usize {
     let nodes = (i.sector_size_bytes() / 32) as usize;
     let layer_challenges = LayerChallenges::new(layers, challenge_count);
 
-    let arbitrary_porep_id = [222; 32];
     let sp = SetupParams {
         nodes,
         degree: drg_degree,
         expansion_degree,
-        porep_id: arbitrary_porep_id,
+        seed: new_seed(),
         layer_challenges,
     };
 
-    let pp = StackedDrg::<ProdbenchTree, Sha256Hasher>::setup(&sp).expect("failed to setup DRG");
+    let pp = StackedDrg::<ProdbenchTree, Sha256Hasher>::setup(&sp).unwrap();
 
     let mut cs = BenchCS::<Bls12>::new();
     <StackedCompound<_, _> as CompoundProof<StackedDrg<ProdbenchTree, Sha256Hasher>, _>>::blank_circuit(
         &pp,
     )
-        .synthesize(&mut cs)
-        .expect("failed to synthesize stacked compound");
+    .synthesize(&mut cs)
+    .unwrap();
 
     cs.num_constraints()
 }
@@ -309,7 +307,7 @@ fn generate_params(i: &ProdbenchInputs) {
     let partitions = PoRepProofPartitions(
         *POREP_PARTITIONS
             .read()
-            .expect("POREP_PARTITIONS poisoned")
+            .unwrap()
             .get(&i.sector_size_bytes())
             .expect("unknown sector size"),
     );
@@ -317,12 +315,10 @@ fn generate_params(i: &ProdbenchInputs) {
         "generating params: porep: (size: {:?}, partitions: {:?})",
         &sector_size, &partitions
     );
-    let dummy_porep_id = [0; 32];
 
     cache_porep_params(PoRepConfig {
         sector_size,
         partitions,
-        porep_id: dummy_porep_id,
     });
 }
 
@@ -330,13 +326,11 @@ fn cache_porep_params(porep_config: PoRepConfig) {
     use filecoin_proofs::parameters::public_params;
     use storage_proofs::porep::stacked::{StackedCompound, StackedDrg};
 
-    let dummy_porep_id = [0; 32];
     let public_params = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
-        dummy_porep_id,
     )
-    .expect("failed to get public_params");
+    .unwrap();
 
     {
         let circuit = <StackedCompound<ProdbenchTree, _> as CompoundProof<
