@@ -13,7 +13,7 @@ use paired::bls12_381::{Bls12, Fr};
 use storage_proofs_core::{
     compound_proof::CircuitComponent, error::Result, gadgets::constraint, gadgets::encode,
     gadgets::por::PoRCircuit, gadgets::uint64, gadgets::variables::Root, hasher::Hasher,
-    merkle::BinaryMerkleTree, util::reverse_bit_numbering,
+    merkle::BinaryMerkleTree, util::fixup_bits,
 };
 
 /// DRG based Proof of Replication.
@@ -145,7 +145,7 @@ impl<'a, H: 'static + Hasher> Circuit<Bls12> for DrgPoRepCircuit<'a, H> {
 
         // get the replica_id in bits
         let replica_id_bits =
-            reverse_bit_numbering(replica_node_num.to_bits_le(cs.namespace(|| "replica_id_bits"))?);
+            fixup_bits(replica_node_num.to_bits_le(cs.namespace(|| "replica_id_bits"))?);
 
         let replica_root_var = Root::Var(replica_root.allocated(cs.namespace(|| "replica_root"))?);
         let data_root_var = Root::Var(data_root.allocated(cs.namespace(|| "data_root"))?);
@@ -212,7 +212,7 @@ impl<'a, H: 'static + Hasher> Circuit<Bls12> for DrgPoRepCircuit<'a, H> {
                                     .ok_or_else(|| SynthesisError::AssignmentMissing)
                             },
                         )?;
-                        Ok(reverse_bit_numbering(num.to_bits_le(
+                        Ok(fixup_bits(num.to_bits_le(
                             cs.namespace(|| format!("parents_{}_bits", i)),
                         )?))
                     })
@@ -305,7 +305,6 @@ mod tests {
 
     use super::*;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use ff::Field;
     use generic_array::typenum;
     use merkletree::store::StoreConfig;
@@ -315,13 +314,14 @@ mod tests {
     use storage_proofs_core::{
         cache_key::CacheKey,
         compound_proof,
-        drgraph::{graph_height, BucketGraph, BASE_DEGREE},
+        drgraph::{graph_height, new_seed, BucketGraph, BASE_DEGREE},
         fr32::{bytes_into_fr, fr_into_bytes},
+        gadgets::TestConstraintSystem,
         hasher::PedersenHasher,
         merkle::MerkleProofTrait,
         proof::ProofScheme,
         test_helper::setup_replica,
-        util::{data_at_node, default_rows_to_discard},
+        util::data_at_node,
     };
 
     use super::super::compound::DrgPoRepCompound;
@@ -349,7 +349,7 @@ mod tests {
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            default_rows_to_discard(nodes, BINARY_ARITY),
+            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
@@ -368,7 +368,7 @@ mod tests {
                 nodes,
                 degree,
                 expansion_degree: 0,
-                porep_id: [32; 32],
+                seed: new_seed(),
             },
             private: false,
             challenges_count: 1,
@@ -382,20 +382,23 @@ mod tests {
             (mmapped_data.as_mut()).into(),
             None,
             config,
-            replica_path,
+            replica_path.clone(),
         )
         .expect("failed to replicate");
 
         let pub_inputs = drg::PublicInputs {
             replica_id: Some(replica_id.into()),
             challenges: vec![challenge],
-            tau: Some(tau),
+            tau: Some(tau.into()),
         };
 
         let priv_inputs = drg::PrivateInputs::<PedersenHasher> {
             tree_d: &aux.tree_d,
             tree_r: &aux.tree_r,
-            tree_r_config_rows_to_discard: default_rows_to_discard(nodes, BINARY_ARITY),
+            tree_r_config_rows_to_discard: StoreConfig::default_rows_to_discard(
+                nodes,
+                BINARY_ARITY,
+            ),
         };
 
         let proof_nc = drg::DrgPoRep::<PedersenHasher, _>::prove(&pp, &pub_inputs, &priv_inputs)
