@@ -29,7 +29,7 @@ impl From<SectorId> for u64 {
 
 impl From<SectorId> for Fr {
     fn from(n: SectorId) -> Self {
-        Fr::from_repr(FrRepr::from(n.0)).expect("from repr failure")
+        Fr::from_repr(FrRepr::from(n.0)).unwrap()
     }
 }
 
@@ -40,8 +40,8 @@ impl fmt::Display for SectorId {
 }
 
 impl SectorId {
-    pub fn as_fr_safe(self) -> [u8; 32] {
-        let mut buf: [u8; 32] = [0; 32];
+    pub fn as_fr_safe(self) -> [u8; 31] {
+        let mut buf: [u8; 31] = [0; 31];
         byteorder::LittleEndian::write_u64(&mut buf[0..8], self.0);
         buf
     }
