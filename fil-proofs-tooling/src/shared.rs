@@ -47,10 +47,7 @@ pub fn create_piece(piece_bytes: UnpaddedBytesAmount) -> NamedTempFile {
     }
     assert_eq!(
         u64::from(piece_bytes),
-        file.as_file()
-            .metadata()
-            .expect("failed to get file metadata")
-            .len()
+        file.as_file().metadata().unwrap().len()
     );
 
     file.as_file_mut()
@@ -67,13 +64,11 @@ pub fn create_piece(piece_bytes: UnpaddedBytesAmount) -> NamedTempFile {
 /// Create a replica for a single sector
 pub fn create_replica<Tree: 'static + MerkleTreeTrait>(
     sector_size: u64,
-    porep_id: [u8; 32],
 ) -> (SectorId, PreCommitReplicaOutput<Tree>) {
-    let (_porep_config, result) =
-        create_replicas::<Tree>(SectorSize(sector_size), 1, false, porep_id);
+    let (_porep_config, result) = create_replicas::<Tree>(SectorSize(sector_size), 1, false);
     // Extract the sector ID and replica output out of the result
     result
-        .expect("create_replicas() failed when called with only_add==false")
+        .unwrap()
         .0
         .pop()
         .expect("failed to create replica outputs")
@@ -84,7 +79,6 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
     sector_size: SectorSize,
     qty_sectors: usize,
     only_add: bool,
-    porep_id: [u8; 32],
 ) -> (
     PoRepConfig,
     Option<(
@@ -101,11 +95,10 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
         partitions: PoRepProofPartitions(
             *POREP_PARTITIONS
                 .read()
-                .expect("poisoned read access")
+                .unwrap()
                 .get(&u64::from(sector_size))
                 .expect("unknown sector size"),
         ),
-        porep_id,
     };
 
     let mut out: Vec<(SectorId, PreCommitReplicaOutput<Tree>)> = Default::default();
@@ -157,7 +150,7 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
             sector_size_unpadded_bytes_ammount,
             &[],
         )
-        .expect("failed to add piece");
+        .unwrap();
         piece_infos.push(vec![info]);
     }
 
