@@ -80,7 +80,8 @@ pub struct DrgParams {
 
     pub expansion_degree: usize,
 
-    pub porep_id: [u8; 32],
+    // Random seed
+    pub seed: [u8; 28],
 }
 
 #[derive(Debug, Clone)]
@@ -249,7 +250,7 @@ where
             sp.drg.nodes,
             sp.drg.degree,
             sp.drg.expansion_degree,
-            sp.drg.porep_id,
+            sp.drg.seed,
         )?;
 
         Ok(PublicParams::new(graph, sp.private, sp.challenges_count))
@@ -396,13 +397,13 @@ where
 
             let key = {
                 let prover_bytes = pub_inputs.replica_id.context("missing replica_id")?;
-                hasher.update(AsRef::<[u8]>::as_ref(&prover_bytes));
+                hasher.input(AsRef::<[u8]>::as_ref(&prover_bytes));
 
                 for p in proof.replica_parents[i].iter() {
-                    hasher.update(AsRef::<[u8]>::as_ref(&p.1.data));
+                    hasher.input(AsRef::<[u8]>::as_ref(&p.1.data));
                 }
 
-                let hash = hasher.finalize_reset();
+                let hash = hasher.result_reset();
                 bytes_into_fr_repr_safe(hash.as_ref()).into()
             };
 
@@ -527,7 +528,7 @@ where
         .into_par_iter()
         .flat_map(|i| {
             decode_block::<H, G>(graph, replica_id, data, exp_parents_data, i)
-                .expect("decode block failure")
+                .unwrap()
                 .into_bytes()
         })
         .collect();
@@ -580,18 +581,18 @@ pub fn create_key_from_tree<H: Hasher, U: 'static + PoseidonArity>(
     tree: &LCMerkleTree<H, U>,
 ) -> Result<H::Domain> {
     let mut hasher = Sha256::new();
-    hasher.update(AsRef::<[u8]>::as_ref(&id));
+    hasher.input(AsRef::<[u8]>::as_ref(&id));
 
     // The hash is about the parents, hence skip if a node doesn't have any parents
     if node != parents[0] as usize {
         let mut scratch: [u8; NODE_SIZE] = [0; NODE_SIZE];
         for parent in parents.iter() {
             tree.read_into(*parent as usize, &mut scratch)?;
-            hasher.update(&scratch);
+            hasher.input(&scratch);
         }
     }
 
-    let hash = hasher.finalize();
+    let hash = hasher.result();
     Ok(bytes_into_fr_repr_safe(hash.as_ref()).into())
 }
 
@@ -613,14 +614,15 @@ mod tests {
     use rand_xorshift::XorShiftRng;
     use storage_proofs_core::{
         cache_key::CacheKey,
-        drgraph::{BucketGraph, BASE_DEGREE},
+        drgraph::{new_seed, BucketGraph, BASE_DEGREE},
         fr32::fr_into_bytes,
         hasher::{Blake2sHasher, PedersenHasher, Sha256Hasher},
         merkle::{BinaryMerkleTree, MerkleTreeTrait},
         table_tests,
         test_helper::setup_replica,
-        util::{data_at_node, default_rows_to_discard},
+        util::data_at_node,
     };
+    use tempfile;
 
     use crate::stacked::BINARY_ARITY;
 
@@ -634,11 +636,11 @@ mod tests {
 
         // MT for original data is always named tree-d, and it will be
         // referenced later in the process as such.
-        let cache_dir = tempfile::tempdir().expect("tempdir failure");
+        let cache_dir = tempfile::tempdir().unwrap();
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            default_rows_to_discard(nodes, BINARY_ARITY),
+            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
@@ -650,7 +652,7 @@ mod tests {
                 nodes,
                 degree: BASE_DEGREE,
                 expansion_degree: 0,
-                porep_id: [32; 32],
+                seed: new_seed(),
             },
             private: false,
             challenges_count: 1,
@@ -665,7 +667,7 @@ mod tests {
             (mmapped_data.as_mut()).into(),
             None,
             config.clone(),
-            replica_path,
+            replica_path.clone(),
         )
         .expect("replication failed");
 
@@ -677,7 +679,7 @@ mod tests {
             &pp,
             &replica_id,
             mmapped_data.as_mut(),
-            Some(config),
+            Some(config.clone()),
         )
         .unwrap_or_else(|e| {
             panic!("Failed to extract data from `DrgPoRep`: {}", e);
@@ -713,11 +715,11 @@ mod tests {
 
         // MT for original data is always named tree-d, and it will be
         // referenced later in the process as such.
-        let cache_dir = tempfile::tempdir().expect("tempdir failure");
+        let cache_dir = tempfile::tempdir().unwrap();
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            default_rows_to_discard(nodes, BINARY_ARITY),
+            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
@@ -729,7 +731,7 @@ mod tests {
                 nodes: data.len() / 32,
                 degree: BASE_DEGREE,
                 expansion_degree: 0,
-                porep_id: [32; 32],
+                seed: new_seed(),
             },
             private: false,
             challenges_count: 1,
@@ -744,7 +746,7 @@ mod tests {
             (mmapped_data.as_mut()).into(),
             None,
             config.clone(),
-            replica_path,
+            replica_path.clone(),
         )
         .expect("replication failed");
 
@@ -757,7 +759,7 @@ mod tests {
                 DrgPoRep::extract(&pp, &replica_id, &mmapped_data, i, Some(config.clone()))
                     .expect("failed to extract node data from PoRep");
 
-            let original_data = data_at_node(&data, i).expect("data_at_node failure");
+            let original_data = data_at_node(&data, i).unwrap();
 
             assert_eq!(
                 original_data,
@@ -795,6 +797,7 @@ mod tests {
             let rng = &mut XorShiftRng::from_seed(crate::TEST_SEED);
             let degree = BASE_DEGREE;
             let expansion_degree = 0;
+            let seed = new_seed();
 
             let replica_id: <Tree::Hasher as Hasher>::Domain =
                 <Tree::Hasher as Hasher>::Domain::random(rng);
@@ -804,11 +807,11 @@ mod tests {
 
             // MT for original data is always named tree-d, and it will be
             // referenced later in the process as such.
-            let cache_dir = tempfile::tempdir().expect("tempdir failure");
+            let cache_dir = tempfile::tempdir().unwrap();
             let config = StoreConfig::new(
                 cache_dir.path(),
                 CacheKey::CommDTree.to_string(),
-                default_rows_to_discard(nodes, BINARY_ARITY),
+                StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
             );
 
             // Generate a replica path.
@@ -822,7 +825,7 @@ mod tests {
                     nodes,
                     degree,
                     expansion_degree,
-                    porep_id: [32; 32],
+                    seed,
                 },
                 private: false,
                 challenges_count: 2,
@@ -847,13 +850,16 @@ mod tests {
             let pub_inputs = PublicInputs::<<Tree::Hasher as Hasher>::Domain> {
                 replica_id: Some(replica_id),
                 challenges: vec![challenge, challenge],
-                tau: Some(tau),
+                tau: Some(tau.clone().into()),
             };
 
             let priv_inputs = PrivateInputs::<Tree::Hasher> {
                 tree_d: &aux.tree_d,
                 tree_r: &aux.tree_r,
-                tree_r_config_rows_to_discard: default_rows_to_discard(nodes, BINARY_ARITY),
+                tree_r_config_rows_to_discard: StoreConfig::default_rows_to_discard(
+                    nodes,
+                    BINARY_ARITY,
+                ),
             };
 
             let real_proof = DrgPoRep::<Tree::Hasher, _>::prove(&pp, &pub_inputs, &priv_inputs)
@@ -875,7 +881,7 @@ mod tests {
                 let proof = Proof::new(
                     real_proof.replica_nodes.clone(),
                     fake_parents,
-                    real_proof.nodes.clone(),
+                    real_proof.nodes.clone().into(),
                 );
 
                 let is_valid =
@@ -914,7 +920,7 @@ mod tests {
                 let proof2 = Proof::new(
                     real_proof.replica_nodes,
                     fake_proof_parents,
-                    real_proof.nodes,
+                    real_proof.nodes.into(),
                 );
 
                 assert!(
@@ -926,7 +932,7 @@ mod tests {
                     "verified in error -- with wrong parent proofs"
                 );
 
-                return;
+                return ();
             }
 
             let proof = real_proof;
@@ -936,7 +942,7 @@ mod tests {
                     PublicInputs::<<Tree::Hasher as Hasher>::Domain> {
                         replica_id: Some(replica_id),
                         challenges: vec![if challenge == 1 { 2 } else { 1 }],
-                        tau: Some(tau),
+                        tau: Some(tau.into()),
                     };
                 let verified = DrgPoRep::<Tree::Hasher, _>::verify(
                     &pp,
