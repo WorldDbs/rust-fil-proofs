@@ -179,11 +179,11 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use rand::{Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
     use storage_proofs_core::{
         compound_proof,
+        gadgets::TestConstraintSystem,
         hasher::{Domain, HashFunction, Hasher, PedersenHasher, PoseidonHasher},
         merkle::{generate_tree, get_base_tree_count, BinaryMerkleTree},
         proof::NoRequirements,
@@ -222,7 +222,8 @@ mod tests {
 
         let pub_params = RationalPoStCompound::<Tree>::setup(&setup_params).expect("setup failed");
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        // Construct and store an MT using a named DiskStore.
+        let temp_dir = tempdir::TempDir::new("tree").unwrap();
         let temp_path = temp_dir.path();
 
         let (_data1, tree1) = generate_tree::<Tree, _>(rng, leaves, Some(temp_path.to_path_buf()));

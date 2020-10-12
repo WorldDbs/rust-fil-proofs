@@ -1,13 +1,11 @@
-use std::convert::TryFrom;
 use std::marker::PhantomData;
 
 use anyhow::ensure;
 use bellperson::gadgets::boolean::{AllocatedBit, Boolean};
 use bellperson::gadgets::{multipack, num};
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
-use ff::PrimeField;
 use generic_array::typenum::Unsigned;
-use paired::bls12_381::{Bls12, Fr, FrRepr};
+use paired::bls12_381::{Bls12, Fr};
 
 use crate::compound_proof::{CircuitComponent, CompoundProof};
 use crate::error::Result;
@@ -81,7 +79,7 @@ impl<
             .collect();
 
         let top = if has_top {
-            let (hashes, index) = opts.pop().expect("pop failure");
+            let (hashes, index) = opts.pop().unwrap();
             vec![PathElement {
                 hashes,
                 index,
@@ -93,7 +91,7 @@ impl<
         };
 
         let sub = if has_sub {
-            let (hashes, index) = opts.pop().expect("pop failure");
+            let (hashes, index) = opts.pop().unwrap();
             vec![PathElement {
                 hashes,
                 index,
@@ -146,9 +144,9 @@ impl<H: Hasher, Arity: 'static + PoseidonArity> SubPath<H, Arity> {
 
         let mut auth_path_bits = Vec::with_capacity(self.path.len());
 
-        for (i, path_element) in self.path.into_iter().enumerate() {
-            let path_hashes = path_element.hashes;
-            let optional_index = path_element.index; // Optional because of Bellman blank-circuit construction mechanics.
+        for (i, path) in self.path.into_iter().enumerate() {
+            let elements = path.hashes;
+            let indexes = path.index;
 
             let cs = &mut cs.namespace(|| format!("merkle tree hash {}", i));
 
@@ -156,7 +154,7 @@ impl<H: Hasher, Arity: 'static + PoseidonArity> SubPath<H, Arity> {
 
             for i in 0..index_bit_count {
                 let bit = AllocatedBit::alloc(cs.namespace(|| format!("index bit {}", i)), {
-                    optional_index.map(|index| ((index >> i) & 1) == 1)
+                    indexes.map(|index| ((index >> i) & 1) == 1)
                 })?;
 
                 index_bits.push(Boolean::from(bit));
@@ -165,7 +163,7 @@ impl<H: Hasher, Arity: 'static + PoseidonArity> SubPath<H, Arity> {
             auth_path_bits.extend_from_slice(&index_bits);
 
             // Witness the authentication path elements adjacent at this depth.
-            let path_hash_nums = path_hashes
+            let path_elements = elements
                 .iter()
                 .enumerate()
                 .map(|(i, elt)| {
@@ -175,7 +173,7 @@ impl<H: Hasher, Arity: 'static + PoseidonArity> SubPath<H, Arity> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let inserted = insert(cs, &cur, &index_bits, &path_hash_nums)?;
+            let inserted = insert(cs, &cur, &index_bits, &path_elements)?;
 
             // Compute the new subtree value
             cur = H::Function::hash_multi_leaf_circuit::<Arity, _>(
@@ -308,19 +306,10 @@ impl<'a, Tree: 'static + MerkleTreeTrait> CompoundProof<'a, PoR<Tree>, PoRCircui
         pub_params: &<PoR<Tree> as ProofScheme<'a>>::PublicParams,
         _k: Option<usize>,
     ) -> Result<Vec<Fr>> {
-        ensure!(
-            pub_inputs.challenge < pub_params.leaves,
-            "Challenge out of range"
-        );
         let mut inputs = Vec::new();
+        let path_bits = challenge_into_auth_path_bits(pub_inputs.challenge, pub_params.leaves);
 
-        // Inputs are (currently, inefficiently) packed with one `Fr` per challenge.
-        // Boolean/bit auth paths trivially correspond to the challenged node's index within a sector.
-        // Defensively convert the challenge with `try_from` as a reminder that we must not truncate.
-        let input_fr = Fr::from_repr(FrRepr::from(
-            u64::try_from(pub_inputs.challenge).expect("challenge type too wide"),
-        ))?;
-        inputs.push(input_fr);
+        inputs.extend(multipack::compute_multipacking::<Bls12>(&path_bits));
 
         if let Some(commitment) = pub_inputs.commitment {
             ensure!(!pub_params.private, "Params must be public");
@@ -453,6 +442,7 @@ mod tests {
 
     use crate::compound_proof;
     use crate::fr32::{bytes_into_fr, fr_into_bytes};
+    use crate::gadgets::{MetricCS, TestConstraintSystem};
     use crate::hasher::{
         Blake2sHasher, Domain, Hasher, PedersenHasher, PoseidonHasher, Sha256Hasher,
     };
@@ -464,8 +454,6 @@ mod tests {
     use crate::proof::NoRequirements;
     use crate::proof::ProofScheme;
     use crate::util::data_at_node;
-    use bellperson::util_cs::metric_cs::MetricCS;
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
 
     type TestTree<H, A> =
         MerkleTreeWrapper<H, VecStore<<H as Hasher>::Domain>, A, typenum::U0, typenum::U0>;
@@ -489,8 +477,7 @@ mod tests {
         let data: Vec<u8> = (0..leaves)
             .flat_map(|_| fr_into_bytes(&Fr::random(rng)))
             .collect();
-        let tree = create_base_merkle_tree::<Tree>(None, leaves, data.as_slice())
-            .expect("create_base_merkle_tree failure");
+        let tree = create_base_merkle_tree::<Tree>(None, leaves, data.as_slice()).unwrap();
 
         let public_inputs = por::PublicInputs {
             challenge: 2,
@@ -508,12 +495,9 @@ mod tests {
         let public_params = PoRCompound::<Tree>::setup(&setup_params).expect("setup failed");
 
         let private_inputs = por::PrivateInputs::<Tree>::new(
-            bytes_into_fr(
-                data_at_node(data.as_slice(), public_inputs.challenge)
-                    .expect("bytes_into_fr failure"),
-            )
-            .expect("failed to create Fr from node data")
-            .into(),
+            bytes_into_fr(data_at_node(data.as_slice(), public_inputs.challenge).unwrap())
+                .expect("failed to create Fr from node data")
+                .into(),
             &tree,
         );
 
@@ -531,7 +515,7 @@ mod tests {
 
         let (circuit, inputs) =
             PoRCompound::<Tree>::circuit_for_test(&public_params, &public_inputs, &private_inputs)
-                .expect("circuit_for_test failure");
+                .unwrap();
 
         let mut cs = TestConstraintSystem::new();
 
@@ -557,23 +541,23 @@ mod tests {
 
     #[test]
     fn test_por_circuit_poseidon_base_2() {
-        test_por_circuit::<TestTree<PoseidonHasher, typenum::U2>>(3, 1_887);
+        test_por_circuit::<TestTree<PoseidonHasher, typenum::U2>>(3, 1_905);
     }
 
     #[test]
     fn test_por_circuit_pedersen_base_4() {
-        test_por_circuit::<TestTree<PedersenHasher, typenum::U4>>(3, 12_399);
+        test_por_circuit::<TestTree<PedersenHasher, typenum::U4>>(3, 12_411);
     }
 
     #[test]
     fn test_por_circuit_pedersen_sub_8_2() {
-        test_por_circuit::<TestTree2<PedersenHasher, typenum::U8, typenum::U2>>(3, 20_663);
+        test_por_circuit::<TestTree2<PedersenHasher, typenum::U8, typenum::U2>>(3, 20_731);
     }
 
     #[test]
     fn test_por_circuit_pedersen_top_8_4_2() {
         test_por_circuit::<TestTree3<PedersenHasher, typenum::U8, typenum::U4, typenum::U2>>(
-            3, 24_795,
+            3, 24_867,
         );
     }
 
@@ -582,67 +566,67 @@ mod tests {
         // We can handle top-heavy trees with a non-zero subtree arity.
         // These should never be produced, though.
         test_por_circuit::<TestTree3<PedersenHasher, typenum::U8, typenum::U2, typenum::U4>>(
-            3, 24_795,
+            3, 24_867,
         );
     }
 
     #[test]
     fn test_por_circuit_blake2s_base_4() {
-        test_por_circuit::<TestTree<Blake2sHasher, typenum::U4>>(3, 130_296);
+        test_por_circuit::<TestTree<Blake2sHasher, typenum::U4>>(3, 130_308);
     }
 
     #[test]
     fn test_por_circuit_sha256_base_4() {
-        test_por_circuit::<TestTree<Sha256Hasher, typenum::U4>>(3, 216_258);
+        test_por_circuit::<TestTree<Sha256Hasher, typenum::U4>>(3, 216_270);
     }
 
     #[test]
     fn test_por_circuit_poseidon_base_4() {
-        test_por_circuit::<TestTree<PoseidonHasher, typenum::U4>>(3, 1_164);
+        test_por_circuit::<TestTree<PoseidonHasher, typenum::U4>>(3, 1_185);
     }
 
     #[test]
     fn test_por_circuit_pedersen_base_8() {
-        test_por_circuit::<TestTree<PedersenHasher, typenum::U8>>(3, 19_289);
+        test_por_circuit::<TestTree<PedersenHasher, typenum::U8>>(3, 19_357);
     }
 
     #[test]
     fn test_por_circuit_blake2s_base_8() {
-        test_por_circuit::<TestTree<Blake2sHasher, typenum::U8>>(3, 174_503);
+        test_por_circuit::<TestTree<Blake2sHasher, typenum::U8>>(3, 174_571);
     }
 
     #[test]
     fn test_por_circuit_sha256_base_8() {
-        test_por_circuit::<TestTree<Sha256Hasher, typenum::U8>>(3, 250_987);
+        test_por_circuit::<TestTree<Sha256Hasher, typenum::U8>>(3, 251_055);
     }
 
     #[test]
     fn test_por_circuit_poseidon_base_8() {
-        test_por_circuit::<TestTree<PoseidonHasher, typenum::U8>>(3, 1_063);
+        test_por_circuit::<TestTree<PoseidonHasher, typenum::U8>>(3, 1_137);
     }
 
     #[test]
     fn test_por_circuit_poseidon_sub_8_2() {
-        test_por_circuit::<TestTree2<PoseidonHasher, typenum::U8, typenum::U2>>(3, 1_377);
+        test_por_circuit::<TestTree2<PoseidonHasher, typenum::U8, typenum::U2>>(3, 1_454);
     }
 
     #[test]
     fn test_por_circuit_poseidon_top_8_4_2() {
         test_por_circuit::<TestTree3<PoseidonHasher, typenum::U8, typenum::U4, typenum::U2>>(
-            3, 1_764,
+            3, 1_848,
         );
     }
 
     #[test]
     fn test_por_circuit_poseidon_top_8_8() {
         // This is the shape we want for 32GiB sectors.
-        test_por_circuit::<TestTree2<PoseidonHasher, typenum::U8, typenum::U8>>(3, 1_593);
+        test_por_circuit::<TestTree2<PoseidonHasher, typenum::U8, typenum::U8>>(3, 1_704);
     }
     #[test]
     fn test_por_circuit_poseidon_top_8_8_2() {
         // This is the shape we want for 64GiB secotrs.
         test_por_circuit::<TestTree3<PoseidonHasher, typenum::U8, typenum::U8, typenum::U2>>(
-            3, 1_907,
+            3, 2_021,
         );
     }
 
@@ -651,7 +635,7 @@ mod tests {
         // We can handle top-heavy trees with a non-zero subtree arity.
         // These should never be produced, though.
         test_por_circuit::<TestTree3<PoseidonHasher, typenum::U8, typenum::U2, typenum::U4>>(
-            3, 1_764,
+            3, 1_848,
         );
     }
 
@@ -679,12 +663,10 @@ mod tests {
                 challenge: i,
                 commitment: Some(tree.root()),
             };
-            let leaf =
-                data_at_node(data.as_slice(), pub_inputs.challenge).expect("data_at_node failure");
-            let leaf_element = <Tree::Hasher as Hasher>::Domain::try_from_bytes(leaf)
-                .expect("try_from_bytes failure");
+            let leaf = data_at_node(data.as_slice(), pub_inputs.challenge).unwrap();
+            let leaf_element = <Tree::Hasher as Hasher>::Domain::try_from_bytes(leaf).unwrap();
             let priv_inputs = por::PrivateInputs::<ResTree<Tree>>::new(leaf_element, &tree);
-            let p = tree.gen_proof(i).expect("gen_proof failure");
+            let p = tree.gen_proof(i).unwrap();
             assert!(p.verify());
 
             // create a non circuit proof
@@ -702,12 +684,7 @@ mod tests {
             let por = PoRCircuit::<ResTree<Tree>> {
                 value: Root::Val(Some(proof.data.into())),
                 auth_path: proof.proof.as_options().into(),
-                root: Root::Val(Some(
-                    pub_inputs
-                        .commitment
-                        .expect("pub_inputs.commitment failure")
-                        .into(),
-                )),
+                root: Root::Val(Some(pub_inputs.commitment.unwrap().into())),
                 private: false,
                 _tree: PhantomData,
             };
@@ -727,7 +704,7 @@ mod tests {
                 &pub_params,
                 None,
             )
-            .expect("generate_public_inputs failure");
+            .unwrap();
 
             let expected_inputs = cs.get_inputs();
 
@@ -831,19 +808,16 @@ mod tests {
                 PoRCompound::<ResTree<Tree>>::setup(&setup_params).expect("setup failed");
 
             let private_inputs = por::PrivateInputs::<ResTree<Tree>>::new(
-                bytes_into_fr(
-                    data_at_node(data.as_slice(), public_inputs.challenge)
-                        .expect("data_at_node failure"),
-                )
-                .expect("failed to create Fr from node data")
-                .into(),
+                bytes_into_fr(data_at_node(data.as_slice(), public_inputs.challenge).unwrap())
+                    .expect("failed to create Fr from node data")
+                    .into(),
                 &tree,
             );
 
             {
                 let (circuit, inputs) =
                     PoRCompound::circuit_for_test(&public_params, &public_inputs, &private_inputs)
-                        .expect("circuit_for_test");
+                        .unwrap();
 
                 let mut cs = TestConstraintSystem::new();
 
@@ -852,7 +826,7 @@ mod tests {
                 if !cs.is_satisfied() {
                     panic!(
                         "failed to satisfy: {:?}",
-                        cs.which_is_unsatisfied().expect("cs is_satisfied failure")
+                        cs.which_is_unsatisfied().unwrap()
                     );
                 }
                 assert!(
@@ -865,7 +839,7 @@ mod tests {
             {
                 let (circuit1, _inputs) =
                     PoRCompound::circuit_for_test(&public_params, &public_inputs, &private_inputs)
-                        .expect("circuit_for_test failure");
+                        .unwrap();
                 let blank_circuit =
                     PoRCompound::<ResTree<Tree>>::blank_circuit(&public_params.vanilla_params);
 
@@ -914,22 +888,17 @@ mod tests {
 
     #[test]
     fn test_private_por_input_circuit_poseidon_binary() {
-        test_private_por_input_circuit::<TestTree<PoseidonHasher, typenum::U2>>(1_886);
+        test_private_por_input_circuit::<TestTree<PoseidonHasher, typenum::U2>>(1_904);
     }
 
     #[test]
     fn test_private_por_input_circuit_pedersen_quad() {
-        test_private_por_input_circuit::<TestTree<PedersenHasher, typenum::U4>>(12_398);
+        test_private_por_input_circuit::<TestTree<PedersenHasher, typenum::U4>>(12_410);
     }
 
     #[test]
     fn test_private_por_input_circuit_poseidon_quad() {
-        test_private_por_input_circuit::<TestTree<PoseidonHasher, typenum::U4>>(1_163);
-    }
-
-    #[test]
-    fn test_private_por_input_circuit_poseidon_oct() {
-        test_private_por_input_circuit::<TestTree<PoseidonHasher, typenum::U8>>(1_062);
+        test_private_por_input_circuit::<TestTree<PoseidonHasher, typenum::U4>>(1_184);
     }
 
     fn test_private_por_input_circuit<Tree: MerkleTreeTrait>(num_constraints: usize) {
@@ -943,8 +912,7 @@ mod tests {
                 .flat_map(|_| fr_into_bytes(&Fr::random(rng)))
                 .collect();
 
-            let tree = create_base_merkle_tree::<Tree>(None, leaves, data.as_slice())
-                .expect("create_base_merkle_tree failure");
+            let tree = create_base_merkle_tree::<Tree>(None, leaves, data.as_slice()).unwrap();
 
             // -- PoR
 
@@ -958,12 +926,9 @@ mod tests {
             };
 
             let priv_inputs = por::PrivateInputs::<Tree>::new(
-                bytes_into_fr(
-                    data_at_node(data.as_slice(), pub_inputs.challenge)
-                        .expect("data_at_node failure"),
-                )
-                .expect("bytes_into_fr failure")
-                .into(),
+                bytes_into_fr(data_at_node(data.as_slice(), pub_inputs.challenge).unwrap())
+                    .unwrap()
+                    .into(),
                 &tree,
             );
 
