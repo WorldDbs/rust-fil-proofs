@@ -1,10 +1,10 @@
 use bellperson::gadgets::boolean::{self, Boolean};
 use bellperson::groth16::*;
-use bellperson::util_cs::bench_cs::BenchCS;
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, ParameterizedBenchmark};
 use paired::bls12_381::Bls12;
 use rand::{thread_rng, Rng};
+use storage_proofs_core::gadgets::BenchCS;
 
 struct Blake2sExample<'a> {
     data: &'a [Option<bool>],
@@ -14,7 +14,7 @@ impl<'a> Circuit<Bls12> for Blake2sExample<'a> {
     fn synthesize<CS: ConstraintSystem<Bls12>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         let data: Vec<Boolean> = self
             .data
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(i, b)| {
                 Ok(Boolean::from(boolean::AllocatedBit::alloc(
@@ -51,9 +51,13 @@ fn blake2s_benchmark(c: &mut Criterion) {
 
 fn blake2s_circuit_benchmark(c: &mut Criterion) {
     let mut rng1 = thread_rng();
-    let groth_params =
-        generate_random_parameters::<Bls12, _, _>(Blake2sExample { data: &[None; 256] }, &mut rng1)
-            .unwrap();
+    let groth_params = generate_random_parameters::<Bls12, _, _>(
+        Blake2sExample {
+            data: &vec![None; 256],
+        },
+        &mut rng1,
+    )
+    .unwrap();
 
     let params = vec![32];
 
