@@ -13,19 +13,19 @@ use clap::{values_t, App, Arg, ArgMatches};
 use flate2::read::GzDecoder;
 use itertools::Itertools;
 use pbr::{ProgressBar, Units};
-use reqwest::{blocking::Client, header, Proxy, Url};
+use reqwest::{header, Client, Proxy, Url};
 use tar::Archive;
 
 use filecoin_proofs::param::*;
 use storage_proofs::parameter_cache::{
-    parameter_cache_dir, parameter_cache_dir_name, ParameterData, ParameterMap, GROTH_PARAMETER_EXT,
+    parameter_cache_dir, GROTH_PARAMETER_EXT, PARAMETER_CACHE_DIR, PARAMETER_CACHE_ENV_VAR,
 };
 
 const ERROR_PARAMETER_FILE: &str = "failed to find file in cache";
 const ERROR_PARAMETER_ID: &str = "failed to find key in manifest";
 
 const IPGET_PATH: &str = "/var/tmp/ipget";
-const DEFAULT_PARAMETERS: &str = include_str!("../../../storage-proofs/parameters.json");
+const DEFAULT_PARAMETERS: &str = include_str!("../../parameters.json");
 const IPGET_VERSION: &str = "v0.4.0";
 
 struct FetchProgress<R> {
@@ -53,8 +53,8 @@ pub fn main() {
 Set {} to specify Groth parameter and verifying key-cache directory.
 Defaults to '{}'
 ",
-                "FIL_PROOFS_PARAMETER_CACHE", // related to var name in core/src/settings.rs
-                parameter_cache_dir_name(),
+                PARAMETER_CACHE_ENV_VAR,
+                PARAMETER_CACHE_DIR
             )[..],
         )
         .arg(
@@ -128,11 +128,7 @@ Defaults to '{}'
 
 fn fetch(matches: &ArgMatches) -> Result<()> {
     let manifest = if matches.is_present("json") {
-        let json_path = PathBuf::from(
-            matches
-                .value_of("json")
-                .expect("failed to convert to path buf"),
-        );
+        let json_path = PathBuf::from(matches.value_of("json").unwrap());
         println!("using JSON file: {:?}", json_path);
 
         if !json_path.exists() {
@@ -228,7 +224,7 @@ fn fetch(matches: &ArgMatches) -> Result<()> {
         for filename in &filenames {
             println!("fetching: {}", filename);
             print!("downloading file... ");
-            io::stdout().flush().expect("failed to flush stdout");
+            io::stdout().flush().unwrap();
 
             match fetch_parameter_file(is_verbose, &manifest, &filename, &ipget_path, ipget_args) {
                 Ok(_) => println!("ok\n"),
@@ -384,7 +380,7 @@ fn download_file_with_ipget(
 ) -> Result<()> {
     let mut cmd = Command::new(ipget_bin_path.as_ref().as_os_str());
     cmd.arg("-o")
-        .arg(target.as_ref().to_str().expect("failed to convert -o arg"))
+        .arg(target.as_ref().to_str().unwrap())
         .arg(cid.as_ref());
 
     if let Some(args) = ipget_args {
@@ -420,7 +416,7 @@ fn get_filenames_requiring_download(
             if get_full_path_for_file_within_cache(parameter_id).exists() {
                 println!("yes");
                 print!("is file valid... ");
-                io::stdout().flush().expect("failed to flush stdout");
+                io::stdout().flush().unwrap();
 
                 match validate_parameter_file(&parameter_map, &parameter_id) {
                     Ok(true) => {
@@ -429,8 +425,7 @@ fn get_filenames_requiring_download(
                     }
                     Ok(false) => {
                         println!("no\n");
-                        invalidate_parameter_file(&parameter_id)
-                            .expect("invalidate failed to rename file");
+                        invalidate_parameter_file(&parameter_id).unwrap();
                         true
                     }
                     Err(err) => {
@@ -478,7 +473,5 @@ fn parameter_map_lookup<'a>(
 ) -> Result<&'a ParameterData> {
     ensure!(parameter_map.contains_key(filename), ERROR_PARAMETER_ID);
 
-    Ok(parameter_map
-        .get(filename)
-        .expect("unreachable: contains_key()"))
+    Ok(parameter_map.get(filename).unwrap())
 }

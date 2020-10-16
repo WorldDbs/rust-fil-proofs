@@ -4,7 +4,8 @@ use std::path::Path;
 
 use failure::Error as FailureError;
 
-use storage_proofs::parameter_cache::{CacheEntryMetadata, ParameterData};
+use filecoin_proofs::param::ParameterData;
+use storage_proofs::parameter_cache::CacheEntryMetadata;
 
 use crate::parampublish::support::session::ParamPublishSessionBuilder;
 use crate::support::{tmp_manifest, FakeIpfsBin};
@@ -78,7 +79,7 @@ fn filename_to_checksum<P: AsRef<Path>>(
                 .file_name()
                 .and_then(|os_str| os_str.to_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| "".to_string()),
+                .unwrap_or("".to_string()),
             ipfs_bin
                 .compute_checksum(item)
                 .expect("failed to compute checksum"),
