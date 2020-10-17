@@ -281,7 +281,6 @@ where
 mod tests {
     use super::*;
 
-    use bellperson::util_cs::{metric_cs::MetricCS, test_cs::TestConstraintSystem};
     use ff::Field;
     use merkletree::store::StoreConfig;
     use pretty_assertions::assert_eq;
@@ -290,13 +289,13 @@ mod tests {
     use storage_proofs_core::{
         cache_key::CacheKey,
         compound_proof,
-        drgraph::{BucketGraph, BASE_DEGREE},
+        drgraph::{new_seed, BucketGraph, BASE_DEGREE},
         fr32::fr_into_bytes,
+        gadgets::{MetricCS, TestConstraintSystem},
         hasher::{Hasher, PedersenHasher, PoseidonHasher},
         merkle::{BinaryMerkleTree, MerkleTreeTrait},
         proof::NoRequirements,
         test_helper::setup_replica,
-        util::default_rows_to_discard,
     };
 
     use crate::stacked::BINARY_ARITY;
@@ -336,12 +335,15 @@ mod tests {
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            default_rows_to_discard(nodes, BINARY_ARITY),
+            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
         let replica_path = cache_dir.path().join("replica-path");
         let mut mmapped_data = setup_replica(&data, &replica_path);
+
+        // Only generate seed once. It would be bad if we used different seeds in the same test.
+        let seed = new_seed();
 
         let setup_params = compound_proof::SetupParams {
             vanilla_params: drg::SetupParams {
@@ -349,7 +351,7 @@ mod tests {
                     nodes,
                     degree,
                     expansion_degree: 0,
-                    porep_id: [32; 32],
+                    seed,
                 },
                 private: false,
                 challenges_count: 2,
@@ -369,7 +371,7 @@ mod tests {
             (mmapped_data.as_mut()).into(),
             data_tree,
             config,
-            replica_path,
+            replica_path.clone(),
         )
         .expect("failed to replicate");
 
@@ -381,7 +383,10 @@ mod tests {
         let private_inputs = drg::PrivateInputs {
             tree_d: &aux.tree_d,
             tree_r: &aux.tree_r,
-            tree_r_config_rows_to_discard: default_rows_to_discard(nodes, BINARY_ARITY),
+            tree_r_config_rows_to_discard: StoreConfig::default_rows_to_discard(
+                nodes,
+                BINARY_ARITY,
+            ),
         };
 
         // This duplication is necessary so public_params don't outlive public_inputs and private_inputs.
@@ -391,7 +396,7 @@ mod tests {
                     nodes,
                     degree,
                     expansion_degree: 0,
-                    porep_id: [32; 32],
+                    seed,
                 },
                 private: false,
                 challenges_count: 2,
