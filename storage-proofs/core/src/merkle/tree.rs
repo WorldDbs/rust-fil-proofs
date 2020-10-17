@@ -92,19 +92,21 @@ impl<
     fn gen_proof(&self, i: usize) -> Result<Self::Proof> {
         let proof = self.inner.gen_proof(i)?;
 
-        debug_assert!(proof.validate::<H::Function>().expect("validate failed"));
+        // For development and debugging.
+        //assert!(proof.validate::<H::Function>().unwrap());
 
         MerkleProof::try_from_proof(proof)
     }
 
     fn gen_cached_proof(&self, i: usize, rows_to_discard: Option<usize>) -> Result<Self::Proof> {
-        if rows_to_discard.is_some() && rows_to_discard.expect("rows to discard failure") == 0 {
+        if rows_to_discard.is_some() && rows_to_discard.unwrap() == 0 {
             return self.gen_proof(i);
         }
 
         let proof = self.inner.gen_cached_proof(i, rows_to_discard)?;
 
-        debug_assert!(proof.validate::<H::Function>().expect("validate failed"));
+        // For development and debugging.
+        //assert!(proof.validate::<H::Function>().unwrap());
 
         MerkleProof::try_from_proof(proof)
     }
@@ -181,11 +183,6 @@ impl<
 
     pub fn from_data_store(data: S, leafs: usize) -> Result<Self> {
         let tree = merkle::MerkleTree::from_data_store(data, leafs)?;
-        Ok(tree.into())
-    }
-
-    pub fn from_byte_slice_with_config(data: &[u8], config: StoreConfig) -> Result<Self> {
-        let tree = merkle::MerkleTree::from_byte_slice_with_config(data, config)?;
         Ok(tree.into())
     }
 
