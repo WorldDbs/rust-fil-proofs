@@ -267,11 +267,11 @@ pub fn generate_sector_challenge<T: Domain>(
     sectors: &OrderedSectorSet,
 ) -> Result<SectorId> {
     let mut hasher = Sha256::new();
-    hasher.update(AsRef::<[u8]>::as_ref(&randomness));
-    hasher.update(&n.to_le_bytes()[..]);
-    let hash = hasher.finalize();
+    hasher.input(AsRef::<[u8]>::as_ref(&randomness));
+    hasher.input(&n.to_le_bytes()[..]);
+    let hash = hasher.result();
 
-    let sector_challenge = LittleEndian::read_u64(&hash[..8]);
+    let sector_challenge = LittleEndian::read_u64(&hash.as_ref()[..8]);
     let sector_index = (sector_challenge % sectors.len() as u64) as usize;
     let sector = *sectors
         .iter()
@@ -317,12 +317,12 @@ pub fn generate_leaf_challenge<T: Domain>(
     );
 
     let mut hasher = Sha256::new();
-    hasher.update(AsRef::<[u8]>::as_ref(&randomness));
-    hasher.update(&sector_challenge_index.to_le_bytes()[..]);
-    hasher.update(&leaf_challenge_index.to_le_bytes()[..]);
-    let hash = hasher.finalize();
+    hasher.input(AsRef::<[u8]>::as_ref(&randomness));
+    hasher.input(&sector_challenge_index.to_le_bytes()[..]);
+    hasher.input(&leaf_challenge_index.to_le_bytes()[..]);
+    let hash = hasher.result();
 
-    let leaf_challenge = LittleEndian::read_u64(&hash[..8]);
+    let leaf_challenge = LittleEndian::read_u64(&hash.as_ref()[..8]);
 
     let challenged_range_index = leaf_challenge
         % (pub_params.sector_size / (pub_params.challenged_nodes * NODE_SIZE) as u64);
@@ -365,14 +365,14 @@ impl<'a, Tree: 'static + MerkleTreeTrait> ProofScheme<'a> for ElectionPoSt<'a, T
             (0..pub_params.challenge_count)
                 .into_par_iter()
                 .flat_map(|n| {
-                    // TODO: replace expect with proper error handling
+                    // TODO: replace unwrap with proper error handling
                     let challenged_leaf_start = generate_leaf_challenge(
                         pub_params,
                         pub_inputs.randomness,
                         pub_inputs.sector_challenge_index,
                         n as u64,
                     )
-                    .expect("generate leaf challenge failure");
+                    .unwrap();
                     (0..pub_params.challenged_nodes)
                         .into_par_iter()
                         .map(move |i| {
@@ -477,7 +477,8 @@ mod tests {
         let mut sectors: Vec<SectorId> = Vec::new();
         let mut trees = BTreeMap::new();
 
-        let temp_dir = tempfile::tempdir().expect("tempdir failure");
+        // Construct and store an MT using a named store.
+        let temp_dir = tempdir::TempDir::new("tree").unwrap();
         let temp_path = temp_dir.path();
 
         for i in 0..5 {
@@ -489,12 +490,10 @@ mod tests {
 
         let candidates =
             generate_candidates::<Tree>(&pub_params, &sectors, &trees, prover_id, randomness)
-                .expect("generate candidates failure");
+                .unwrap();
 
         let candidate = &candidates[0];
-        let tree = trees
-            .remove(&candidate.sector_id)
-            .expect("trees.remove failure");
+        let tree = trees.remove(&candidate.sector_id).unwrap();
         let comm_r_last = tree.root();
         let comm_c = <Tree::Hasher as Hasher>::Domain::random(rng);
         let comm_r = <Tree::Hasher as Hasher>::Function::hash2(&comm_c, &comm_r_last);

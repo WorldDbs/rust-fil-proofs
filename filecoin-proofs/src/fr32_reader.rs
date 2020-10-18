@@ -328,9 +328,9 @@ mod tests {
         buffer.copy_from_slice(&val[..]);
         buffer.reset_available(64);
 
-        for (i, &byte) in val.iter().enumerate().take(8) {
+        for i in 0..8 {
             let read = buffer.read_u8();
-            assert_eq!(read, byte, "failed to read byte {}", i);
+            assert_eq!(read, val[i], "failed to read byte {}", i);
         }
     }
 
@@ -377,9 +377,7 @@ mod tests {
         let data = vec![3u8; 30];
         let mut reader = Fr32Reader::new(io::Cursor::new(&data));
         let mut padded = Vec::new();
-        reader
-            .read_to_end(&mut padded)
-            .expect("in-memory read failed");
+        reader.read_to_end(&mut padded).unwrap();
         assert_eq!(&data[..], &padded[..]);
 
         assert_eq!(padded.into_boxed_slice(), bit_vec_padding(data));
@@ -390,9 +388,7 @@ mod tests {
         let data = vec![255u8; 32];
         let mut padded = Vec::new();
         let mut reader = Fr32Reader::new(io::Cursor::new(&data));
-        reader
-            .read_to_end(&mut padded)
-            .expect("in-memory read failed");
+        reader.read_to_end(&mut padded).unwrap();
 
         assert_eq!(&padded[0..31], &data[0..31]);
         assert_eq!(padded[31], 0b0011_1111);
@@ -407,9 +403,7 @@ mod tests {
         let data = vec![255u8; 127];
         let mut padded = Vec::new();
         let mut reader = Fr32Reader::new(io::Cursor::new(&data));
-        reader
-            .read_to_end(&mut padded)
-            .expect("in-memory read failed");
+        reader.read_to_end(&mut padded).unwrap();
 
         assert_eq!(&padded[0..31], &data[0..31]);
         assert_eq!(padded[31], 0b0011_1111);
@@ -466,7 +460,7 @@ mod tests {
 
         let mut buf = Vec::new();
         let mut reader = Fr32Reader::new(io::Cursor::new(&data));
-        reader.read_to_end(&mut buf).expect("in-memory read failed");
+        reader.read_to_end(&mut buf).unwrap();
 
         assert_eq!(buf.clone().into_boxed_slice(), bit_vec_padding(data));
         validate_fr32(&buf);
@@ -485,7 +479,7 @@ mod tests {
 
                 let mut buf = Vec::new();
                 let mut reader = Fr32Reader::new(io::Cursor::new(&data));
-                reader.read_to_end(&mut buf).expect("in-memory read failed");
+                reader.read_to_end(&mut buf).unwrap();
 
                 assert_eq!(buf.clone().into_boxed_slice(), bit_vec_padding(data));
             }
@@ -505,7 +499,7 @@ mod tests {
         let raw_data: BitVec<LittleEndian, u8> = BitVec::from(raw_data);
 
         for data_unit in raw_data.into_iter().chunks(DATA_BITS as usize).into_iter() {
-            padded_data.extend(data_unit);
+            padded_data.extend(data_unit.into_iter());
 
             // To avoid reconverting the iterator, we deduce if we need the padding
             // by the length of `padded_data`: a full data unit would not leave the
@@ -521,16 +515,14 @@ mod tests {
     }
 
     fn validate_fr32(bytes: &[u8]) {
-        let chunks = (bytes.len() as f64 / 32_f64).ceil() as usize;
+        let chunks = (bytes.len() as f64 / 32 as f64).ceil() as usize;
         for (i, chunk) in bytes.chunks(32).enumerate() {
-            let _ = storage_proofs::fr32::bytes_into_fr(chunk).unwrap_or_else(|_| {
-                panic!(
-                    "chunk {}/{} cannot be converted to valid Fr: {:?}",
-                    i + 1,
-                    chunks,
-                    chunk
-                )
-            });
+            let _ = storage_proofs::fr32::bytes_into_fr(chunk).expect(&format!(
+                "chunk {}/{} cannot be converted to valid Fr: {:?}",
+                i + 1,
+                chunks,
+                chunk
+            ));
         }
     }
 
@@ -548,15 +540,15 @@ mod tests {
 
         let mut buf = Vec::new();
         let mut reader = Fr32Reader::new(io::Cursor::new(&source));
-        reader.read_to_end(&mut buf).expect("in-memory read failed");
+        reader.read_to_end(&mut buf).unwrap();
 
-        for (i, &byte) in buf.iter().enumerate().take(31) {
-            assert_eq!(byte, i as u8 + 1);
+        for i in 0..31 {
+            assert_eq!(buf[i], i as u8 + 1);
         }
         assert_eq!(buf[31], 63); // Six least significant bits of 0xff
         assert_eq!(buf[32], (1 << 2) | 0b11); // 7
-        for (i, &byte) in buf.iter().enumerate().skip(33).take(30) {
-            assert_eq!(byte, (i as u8 - 31) << 2);
+        for i in 33..63 {
+            assert_eq!(buf[i], (i as u8 - 31) << 2);
         }
         assert_eq!(buf[63], (0x0f << 2)); // 4-bits of ones, half of 0xff, shifted by two, followed by two bits of 0-padding.
         assert_eq!(buf[64], 0x0f | 9 << 4); // The last half of 0xff, 'followed' by 9.
