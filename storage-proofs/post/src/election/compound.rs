@@ -168,9 +168,9 @@ mod tests {
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
 
-    use bellperson::util_cs::{metric_cs::MetricCS, test_cs::TestConstraintSystem};
     use storage_proofs_core::{
         compound_proof,
+        gadgets::{MetricCS, TestConstraintSystem},
         hasher::{Domain, HashFunction, Hasher, PedersenHasher, PoseidonHasher},
         merkle::{generate_tree, get_base_tree_count, LCTree, MerkleTreeTrait},
         proof::NoRequirements,
@@ -213,7 +213,8 @@ mod tests {
         let mut sectors: Vec<SectorId> = Vec::new();
         let mut trees = BTreeMap::new();
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        // Construct and store an MT using a named store.
+        let temp_dir = tempdir::TempDir::new("tree").unwrap();
         let temp_path = temp_dir.path();
 
         for i in 0..5 {
