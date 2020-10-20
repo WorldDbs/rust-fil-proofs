@@ -3,11 +3,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use failure::SyncFailure;
-use rexpect::session::PtyReplSession;
+use rexpect::session::PtyBashSession;
 use tempfile;
 use tempfile::TempDir;
 
 use crate::support::{cargo_bin, spawn_bash_with_retries};
+use storage_proofs::parameter_cache::PARAMETER_CACHE_ENV_VAR;
 
 pub struct ParamFetchSessionBuilder {
     cache_dir: TempDir,
@@ -51,7 +52,7 @@ impl ParamFetchSessionBuilder {
         filename: P,
         r: &mut R,
     ) -> ParamFetchSessionBuilder {
-        let mut pbuf = self.cache_dir.path().to_path_buf();
+        let mut pbuf = self.cache_dir.path().clone().to_path_buf();
         pbuf.push(filename.as_ref());
 
         let mut file = File::create(&pbuf).expect("failed to create file in temp dir");
@@ -77,17 +78,17 @@ impl ParamFetchSessionBuilder {
                 s.push_str(&wl.join(","));
                 s
             })
-            .unwrap_or_else(|| "".to_string());
+            .unwrap_or("".to_string());
 
         let json_argument = if self.manifest.is_some() {
-            format!("--json={:?}", self.manifest.expect("missing manifest"))
+            format!("--json={:?}", self.manifest.unwrap())
         } else {
             "".to_string()
         };
 
         let cmd = format!(
             "{}={} {:?} {} {} {} --ipget-bin={:?}",
-            "FIL_PROOFS_PARAMETER_CACHE", // related to var name in core/src/settings.rs
+            PARAMETER_CACHE_ENV_VAR,
             cache_dir_path,
             paramfetch_path,
             if self.prompt_enabled { "" } else { "--all" },
@@ -107,7 +108,7 @@ impl ParamFetchSessionBuilder {
 
 /// An active pseudoterminal (pty) used to interact with paramfetch.
 pub struct ParamFetchSession {
-    pty_session: PtyReplSession,
+    pty_session: PtyBashSession,
     _cache_dir: TempDir,
 }
 
