@@ -1,6 +1,5 @@
 use bellperson::gadgets::boolean::{self, Boolean};
 use bellperson::groth16::*;
-use bellperson::util_cs::bench_cs::BenchCS;
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use criterion::{
     black_box, criterion_group, criterion_main, Criterion, ParameterizedBenchmark, Throughput,
@@ -8,6 +7,7 @@ use criterion::{
 use paired::bls12_381::Bls12;
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
+use storage_proofs_core::gadgets::BenchCS;
 
 struct Sha256Example<'a> {
     data: &'a [Option<bool>],
@@ -17,7 +17,7 @@ impl<'a> Circuit<Bls12> for Sha256Example<'a> {
     fn synthesize<CS: ConstraintSystem<Bls12>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         let data: Vec<Boolean> = self
             .data
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(i, b)| {
                 Ok(Boolean::from(boolean::AllocatedBit::alloc(
