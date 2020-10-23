@@ -31,12 +31,12 @@ where
 mod tests {
     use super::*;
 
-    use bellperson::util_cs::test_cs::TestConstraintSystem;
     use bellperson::ConstraintSystem;
     use ff::Field;
     use paired::bls12_381::{Bls12, Fr};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
+    use storage_proofs_core::gadgets::TestConstraintSystem;
     use storage_proofs_core::hasher::{HashFunction, Hasher, PedersenHasher};
 
     use crate::stacked::vanilla::hash::hash_single_column as vanilla_hash_single_column;
@@ -103,9 +103,9 @@ mod tests {
                 .expect("hash_single_column function failed");
 
             assert!(cs.is_satisfied(), "constraints not satisfied");
-            assert_eq!(cs.num_constraints(), 598);
+            assert_eq!(cs.num_constraints(), 601);
 
-            let expected: Fr = vanilla_hash_single_column(&vals);
+            let expected: Fr = vanilla_hash_single_column(&vals).into();
 
             assert_eq!(
                 expected,

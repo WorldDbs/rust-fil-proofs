@@ -6,6 +6,11 @@ use storage_proofs::proof::ProofScheme;
 use crate::constants::*;
 use crate::types::{MerkleTreeTrait, PaddedBytesAmount, PoStConfig};
 
+const DRG_SEED: [u8; 28] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27,
+]; // Arbitrary, need a theory for how to vary this over time.
+
 type WinningPostSetupParams = fallback::SetupParams;
 pub type WinningPostPublicParams = fallback::PublicParams;
 
@@ -15,13 +20,8 @@ pub type WindowPostPublicParams = fallback::PublicParams;
 pub fn public_params<Tree: 'static + MerkleTreeTrait>(
     sector_bytes: PaddedBytesAmount,
     partitions: usize,
-    porep_id: [u8; 32],
 ) -> Result<stacked::PublicParams<Tree>> {
-    StackedDrg::<Tree, DefaultPieceHasher>::setup(&setup_params(
-        sector_bytes,
-        partitions,
-        porep_id,
-    )?)
+    StackedDrg::<Tree, DefaultPieceHasher>::setup(&setup_params(sector_bytes, partitions)?)
 }
 
 pub fn winning_post_public_params<Tree: 'static + MerkleTreeTrait>(
@@ -71,18 +71,17 @@ pub fn window_post_setup_params(post_config: &PoStConfig) -> WindowPostSetupPara
 pub fn setup_params(
     sector_bytes: PaddedBytesAmount,
     partitions: usize,
-    porep_id: [u8; 32],
 ) -> Result<stacked::SetupParams> {
     let layer_challenges = select_challenges(
         partitions,
         *POREP_MINIMUM_CHALLENGES
             .read()
-            .expect("POREP_MINIMUM_CHALLENGES poisoned")
+            .unwrap()
             .get(&u64::from(sector_bytes))
             .expect("unknown sector size") as usize,
         *LAYERS
             .read()
-            .expect("LAYERS poisoned")
+            .unwrap()
             .get(&u64::from(sector_bytes))
             .expect("unknown sector size"),
     )?;
@@ -102,7 +101,7 @@ pub fn setup_params(
         nodes,
         degree,
         expansion_degree,
-        porep_id,
+        seed: DRG_SEED,
         layer_challenges,
     })
 }
@@ -131,7 +130,7 @@ mod tests {
     fn partition_layer_challenges_test() {
         let f = |partitions| {
             select_challenges(partitions, 12, 11)
-                .expect("never fails")
+                .unwrap()
                 .challenges_count_all()
         };
         // Update to ensure all supported PoRepProofPartitions options are represented here.
@@ -152,8 +151,7 @@ mod tests {
             sector_size: 2048u64.into(),
         };
 
-        let params =
-            winning_post_public_params::<DefaultOctLCTree>(&config).expect("failed to get params");
+        let params = winning_post_public_params::<DefaultOctLCTree>(&config).unwrap();
         assert_eq!(params.sector_count, 66);
         assert_eq!(params.challenge_count, 1);
         assert_eq!(params.sector_size, 2048);
