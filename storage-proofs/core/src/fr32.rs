@@ -67,7 +67,7 @@ pub fn bytes_into_fr_repr_safe(r: &[u8]) -> FrRepr {
 // Takes an Fr and returns a vector of exactly 32 bytes guaranteed to contain a valid Fr.
 pub fn fr_into_bytes(fr: &Fr) -> Fr32Vec {
     let mut out = Vec::with_capacity(32);
-    fr.into_repr().write_le(&mut out).expect("write_le failure");
+    fr.into_repr().write_le(&mut out).unwrap();
     out
 }
 
@@ -90,7 +90,7 @@ pub fn frs_into_bytes(frs: &[Fr]) -> Fr32Vec {
 pub fn u32_into_fr(n: u32) -> Fr {
     let mut buf: Fr32Vec = vec![0u8; 32];
     let mut w = &mut buf[0..4];
-    w.write_u32::<LittleEndian>(n).expect("write_u32 failure");
+    w.write_u32::<LittleEndian>(n).unwrap();
 
     bytes_into_fr(&buf).expect("should never fail since u32 is in the field")
 }
@@ -99,7 +99,7 @@ pub fn u32_into_fr(n: u32) -> Fr {
 pub fn u64_into_fr(n: u64) -> Fr {
     let mut buf: Fr32Vec = vec![0u8; 32];
     let mut w = &mut buf[0..8];
-    w.write_u64::<LittleEndian>(n).expect("write_u64 failure");
+    w.write_u64::<LittleEndian>(n).unwrap();
 
     bytes_into_fr(&buf).expect("should never fail since u64 is in the field")
 }
@@ -109,8 +109,8 @@ mod tests {
     use super::*;
 
     fn bytes_fr_test(bytes: Fr32Ary, expect_success: bool) {
-        let b = &bytes[..];
-        let fr_result = bytes_into_fr(&b);
+        let mut b = &bytes[..];
+        let fr_result = bytes_into_fr(&mut b);
         if expect_success {
             let f = fr_result.expect("Failed to convert bytes to `Fr`");
             let b2 = fr_into_bytes(&f);
@@ -164,7 +164,8 @@ mod tests {
     }
 
     fn bytes_into_frs_into_bytes_test(bytes: &Fr32) {
-        let frs = bytes_into_frs(bytes).expect("Failed to convert bytes into a `Vec<Fr>`");
+        let mut bytes = bytes.clone();
+        let frs = bytes_into_frs(&mut bytes).expect("Failed to convert bytes into a `Vec<Fr>`");
         assert!(frs.len() == 3);
         let bytes_back = frs_into_bytes(&frs);
         assert!(bytes.to_vec() == bytes_back);
