@@ -38,7 +38,7 @@ where
 {
     info!("trying parameters memory cache for: {}", &identifier);
     {
-        let cache = (*cache_ref).lock().expect("poisoned cache");
+        let cache = (*cache_ref).lock().unwrap();
 
         if let Some(entry) = cache.get(&identifier) {
             info!("found params in memory cache for {}", &identifier);
@@ -51,7 +51,7 @@ where
     let new_entry = Arc::new(generator()?);
     let res = new_entry.clone();
     {
-        let cache = &mut (*cache_ref).lock().expect("poisoned cache");
+        let cache = &mut (*cache_ref).lock().unwrap();
         cache.insert(identifier, new_entry);
     }
 
@@ -81,7 +81,6 @@ pub fn get_stacked_params<Tree: 'static + MerkleTreeTrait>(
     let public_params = public_params::<Tree>(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
-        porep_config.porep_id,
     )?;
 
     let parameters_generator = || {
@@ -152,7 +151,6 @@ pub fn get_stacked_verifying_key<Tree: 'static + MerkleTreeTrait>(
     let public_params = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
-        porep_config.porep_id,
     )?;
 
     let vk_generator = || {

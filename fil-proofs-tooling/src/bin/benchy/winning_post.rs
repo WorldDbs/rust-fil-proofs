@@ -53,8 +53,7 @@ pub fn run_fallback_post_bench<Tree: 'static + MerkleTreeTrait>(
             "This benchmark only works with WINNING_POST_SECTOR_COUNT == 1"
         ));
     }
-    let arbitrary_porep_id = [66; 32];
-    let (sector_id, replica_output) = create_replica::<Tree>(sector_size, arbitrary_porep_id);
+    let (sector_id, replica_output) = create_replica::<Tree>(sector_size);
 
     // Store the replica's private and publicly facing info for proving and verifying respectively.
     let pub_replica_info = vec![(sector_id, replica_output.public_replica_info)];
