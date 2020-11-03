@@ -1,6 +1,6 @@
 [package]
 name = "storage-proofs-porep"
-version = "2.0.0"
+version = "4.0.0"
 authors = ["dignifiedquire <me@dignifiedquire.com>"]
 description = "Proofs of replication"
 license = "MIT OR Apache-2.0"
@@ -9,7 +9,7 @@ repository = "https://github.com/filecoin-project/rust-fil-proofs"
 readme = "README.md"
 
 [dependencies]
-storage-proofs-core = { path = "../core", version = "2.0.0" }
+storage-proofs-core = { path = "../core", version = "4.0.0" }
 sha2raw = { path = "../../sha2raw", version = "1.0.0" }
 rand = "0.7"
 merkletree = "0.20.0"
@@ -27,11 +27,9 @@ log = "0.4.7"
 pretty_assertions = "0.6.1"
 generic-array = "0.13.2"
 anyhow = "1.0.23"
-once_cell = "1.3.1"
-neptune = { git = "https://github.com/filecoin-project/neptune.git", branch="v1-0-candidate", features=["gpu"] }
+neptune = { version = "1.0.1", features = ["gpu"] }
 num_cpus = "1.10.1"
-itertools = "0.9.0"
-positioned-io = "0.2.2"
+hex = "0.4.2"
 byteorder = "1.3.4"
 
 [dev-dependencies]
@@ -39,7 +37,6 @@ tempdir = "0.3.7"
 tempfile = "3"
 rand_xorshift = "0.2.0"
 criterion = "0.3.2"
-femme = "1.3.0"
 
 [features]
 default = []
@@ -52,6 +49,3 @@ harness = false
 name = "parents"
 harness = false
 
-[[bench]]
-name = "batch_hasher"
-harness = false
