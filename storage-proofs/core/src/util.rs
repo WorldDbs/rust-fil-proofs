@@ -2,7 +2,10 @@ use crate::error;
 use anyhow::ensure;
 use bellperson::gadgets::boolean::{self, AllocatedBit, Boolean};
 use bellperson::{ConstraintSystem, SynthesisError};
+use merkletree::merkle::get_merkle_tree_row_count;
 use paired::Engine;
+
+use super::settings;
 
 pub const NODE_SIZE: usize = 32;
 
@@ -124,19 +127,52 @@ pub fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
         .collect()
 }
 
-/// Adds a padding bit and reverses the byte order in the list of bits, and adds a padding bit.
-/// This is used to transform the output from `AllocatedNum::to_bits_le` into the matching format
-/// needed to match the way an `Fr` is hashed with sha256.
-pub fn fixup_bits(mut bits: Vec<boolean::Boolean>) -> Vec<boolean::Boolean> {
-    assert_eq!(bits.len(), 255, "invalid bit length");
-    // add padding
-    bits.push(boolean::Boolean::Constant(false));
+/// Reverse the order of bits within each byte (bit numbering), but without altering the order of bytes
+/// within the array (endianness) — when bit array is viewed as a flattened sequence of octets.
+/// Before intra-byte bit reversal begins, zero-bit padding is added so every byte is full.
+pub fn reverse_bit_numbering(bits: Vec<boolean::Boolean>) -> Vec<boolean::Boolean> {
+    let mut padded_bits = bits;
+    // Pad partial bytes
+    while padded_bits.len() % 8 != 0 {
+        padded_bits.push(boolean::Boolean::Constant(false));
+    }
 
-    bits.chunks(8)
+    padded_bits
+        .chunks(8)
         .map(|chunk| chunk.iter().rev())
         .flatten()
         .cloned()
         .collect()
+}
+
+// If the tree is large enough to use the default value (per-arity), use it.  If it's too small to cache anything (i.e. not enough rows), don't discard any.
+pub fn default_rows_to_discard(leafs: usize, arity: usize) -> usize {
+    let row_count = get_merkle_tree_row_count(leafs, arity);
+    if row_count <= 2 {
+        // If a tree only has a root row and/or base, there is
+        // nothing to discard.
+        return 0;
+    } else if row_count == 3 {
+        // If a tree only has 1 row between the base and root,
+        // it's all that can be discarded.
+        return 1;
+    }
+
+    // row_count - 2 discounts the base layer (1) and root (1)
+    let max_rows_to_discard = row_count - 2;
+
+    // This configurable setting is for a default oct-tree
+    // rows_to_discard value, which defaults to 2.
+    let rows_to_discard = settings::SETTINGS.lock().unwrap().rows_to_discard as usize;
+
+    // Discard at most 'constant value' rows (coded below,
+    // differing by arity) while respecting the max number that
+    // the tree can support discarding.
+    match arity {
+        2 => std::cmp::min(max_rows_to_discard, 7),
+        4 => std::cmp::min(max_rows_to_discard, 5),
+        _ => std::cmp::min(max_rows_to_discard, rows_to_discard),
+    }
 }
 
 #[cfg(test)]
@@ -213,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fixup_bits() {
+    fn test_reverse_bit_numbering() {
         for _ in 0..100 {
             let mut cs = TestConstraintSystem::<Bls12>::new();
             let rng = &mut XorShiftRng::from_seed(crate::TEST_SEED);
@@ -229,9 +265,9 @@ mod tests {
                 bytes_into_boolean_vec_be(cs.namespace(|| "val_bits_2"), Some(&val_vec), 256)
                     .unwrap();
 
-            let val_num_fixed_bits = fixup_bits(val_num_bits);
+            let val_num_reversed_bit_numbering = reverse_bit_numbering(val_num_bits);
 
-            let a_values: Vec<bool> = val_num_fixed_bits
+            let a_values: Vec<bool> = val_num_reversed_bit_numbering
                 .iter()
                 .map(|v| v.get_value().unwrap())
                 .collect();
