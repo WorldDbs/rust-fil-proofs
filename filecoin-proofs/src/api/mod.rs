@@ -14,6 +14,7 @@ use storage_proofs::porep::stacked::{
 };
 use storage_proofs::porep::PoRep;
 use storage_proofs::sector::SectorId;
+use storage_proofs::util::default_rows_to_discard;
 use typenum::Unsigned;
 
 use crate::api::util::{as_safe_commitment, get_base_tree_leafs, get_base_tree_size};
@@ -131,8 +132,13 @@ where
     let comm_d =
         as_safe_commitment::<<DefaultPieceHasher as Hasher>::Domain, _>(&comm_d, "comm_d")?;
 
-    let replica_id =
-        generate_replica_id::<Tree::Hasher, _>(&prover_id, sector_id.into(), &ticket, comm_d);
+    let replica_id = generate_replica_id::<Tree::Hasher, _>(
+        &prover_id,
+        sector_id.into(),
+        &ticket,
+        comm_d,
+        &porep_config.porep_id,
+    );
 
     let mut data = Vec::new();
     sealed_sector.read_to_end(&mut data)?;
@@ -144,7 +150,7 @@ where
     let config = StoreConfig::new(
         cache_path.as_ref(),
         CacheKey::CommDTree.to_string(),
-        StoreConfig::default_rows_to_discard(
+        default_rows_to_discard(
             base_tree_leafs,
             <DefaultBinaryTree as MerkleTreeTrait>::Arity::to_usize(),
         ),
@@ -152,6 +158,7 @@ where
     let pp = public_params(
         PaddedBytesAmount::from(porep_config),
         usize::from(PoRepProofPartitions::from(porep_config)),
+        porep_config.porep_id,
     )?;
 
     let offset_padded: PaddedBytesAmount = UnpaddedBytesAmount::from(offset).into();
@@ -559,6 +566,7 @@ mod tests {
         let out = bytes_into_fr(&not_convertible_to_fr_bytes);
         assert!(out.is_err(), "tripwire");
 
+        let arbitrary_porep_id = [87; 32];
         {
             let result = verify_seal::<DefaultOctLCTree>(
                 PoRepConfig {
@@ -570,6 +578,7 @@ mod tests {
                             .get(&SECTOR_SIZE_2_KIB)
                             .unwrap(),
                     ),
+                    porep_id: arbitrary_porep_id,
                 },
                 not_convertible_to_fr_bytes,
                 convertible_to_fr_bytes,
@@ -604,6 +613,7 @@ mod tests {
                             .get(&SECTOR_SIZE_2_KIB)
                             .unwrap(),
                     ),
+                    porep_id: arbitrary_porep_id,
                 },
                 convertible_to_fr_bytes,
                 not_convertible_to_fr_bytes,
