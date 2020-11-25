@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use bellperson::gadgets::{boolean::Boolean, num};
+use bellperson::gadgets::{boolean::Boolean, num, uint32};
 use bellperson::{ConstraintSystem, SynthesisError};
 use generic_array::typenum::{U0, U2};
 use paired::bls12_381::{Bls12, Fr};
@@ -10,7 +10,7 @@ use storage_proofs_core::{
     gadgets::{encode::encode, uint64, variables::Root},
     hasher::{Hasher, PoseidonArity},
     merkle::{DiskStore, MerkleProofTrait, MerkleTreeTrait, MerkleTreeWrapper},
-    util::fixup_bits,
+    util::reverse_bit_numbering,
 };
 
 use super::{
@@ -159,6 +159,8 @@ impl<Tree: MerkleTreeTrait, G: 'static + Hasher> Proof<Tree, G> {
         challenge_num.pack_into_input(cs.namespace(|| "challenge input"))?;
 
         for layer in 1..=layers {
+            let layer_num = uint32::UInt32::constant(layer as u32);
+
             let mut cs = cs.namespace(|| format!("labeling_{}", layer));
 
             // Collect the parents
@@ -168,7 +170,7 @@ impl<Tree: MerkleTreeTrait, G: 'static + Hasher> Proof<Tree, G> {
             for parent_col in &drg_parents {
                 let parent_val_num = parent_col.get_value(layer);
                 let parent_val_bits =
-                    fixup_bits(parent_val_num.to_bits_le(
+                    reverse_bit_numbering(parent_val_num.to_bits_le(
                         cs.namespace(|| format!("drg_parent_{}_bits", parents.len())),
                     )?);
                 parents.push(parent_val_bits);
@@ -180,7 +182,7 @@ impl<Tree: MerkleTreeTrait, G: 'static + Hasher> Proof<Tree, G> {
                     // subtract 1 from the layer index, as the exp parents, are shifted by one, as they
                     // do not store a value for the first layer
                     let parent_val_num = parent_col.get_value(layer - 1);
-                    let parent_val_bits = fixup_bits(parent_val_num.to_bits_le(
+                    let parent_val_bits = reverse_bit_numbering(parent_val_num.to_bits_le(
                         cs.namespace(|| format!("exp_parent_{}_bits", parents.len())),
                     )?);
                     parents.push(parent_val_bits);
@@ -207,6 +209,7 @@ impl<Tree: MerkleTreeTrait, G: 'static + Hasher> Proof<Tree, G> {
                 cs.namespace(|| "create_label"),
                 replica_id,
                 expanded_parents,
+                layer_num,
                 challenge_num.clone(),
             )?;
             column_labels.push(label);
