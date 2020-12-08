@@ -31,7 +31,7 @@ impl<'a, 'c, Tree: 'static + MerkleTreeTrait, G: 'static + Hasher> ProofScheme<'
             sp.nodes,
             sp.degree,
             sp.expansion_degree,
-            sp.seed,
+            sp.porep_id,
         )?;
 
         Ok(PublicParams::new(graph, sp.layer_challenges.clone()))
