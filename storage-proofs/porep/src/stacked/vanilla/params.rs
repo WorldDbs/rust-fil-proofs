@@ -1,3 +1,4 @@
+use std::fs::remove_file;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -36,9 +37,7 @@ pub struct SetupParams {
 
     pub expansion_degree: usize,
 
-    // Random seed
-    pub seed: [u8; 28],
-
+    pub porep_id: [u8; 32],
     pub layer_challenges: LayerChallenges,
 }
 
@@ -391,6 +390,29 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAux<Tree, G> {
             Path::new(&StoreConfig::data_path(&config.path, &config.id)).exists()
         };
 
+        let delete_tree_c_store = |config: &StoreConfig, tree_c_size: usize| -> Result<()> {
+            let tree_c_store = DiskStore::<<Tree::Hasher as Hasher>::Domain>::new_from_disk(
+                tree_c_size,
+                Tree::Arity::to_usize(),
+                &config,
+            )
+            .context("tree_c")?;
+            // Note: from_data_store requires the base tree leaf count
+            let tree_c = DiskTree::<
+                Tree::Hasher,
+                Tree::Arity,
+                Tree::SubTreeArity,
+                Tree::TopTreeArity,
+            >::from_data_store(
+                tree_c_store,
+                get_merkle_tree_leafs(tree_c_size, Tree::Arity::to_usize())?,
+            )
+            .context("tree_c")?;
+            tree_c.delete(config.clone()).context("tree_c")?;
+
+            Ok(())
+        };
+
         if cached(&t_aux.tree_d_config) {
             let tree_d_size = t_aux
                 .tree_d_config
@@ -410,36 +432,26 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAux<Tree, G> {
             trace!("tree d deleted");
         }
 
-        if cached(&t_aux.tree_c_config) {
-            let tree_c_size = t_aux
-                .tree_c_config
-                .size
-                .context("tree_c config has no size")?;
+        let tree_count = get_base_tree_count::<Tree>();
+        let tree_c_size = t_aux
+            .tree_c_config
+            .size
+            .context("tree_c config has no size")?;
+        let configs = split_config(t_aux.tree_c_config.clone(), tree_count)?;
 
-            let tree_count = get_base_tree_count::<Tree>();
-            let configs = split_config(t_aux.tree_c_config.clone(), tree_count)?;
+        if cached(&t_aux.tree_c_config) {
+            delete_tree_c_store(&t_aux.tree_c_config, tree_c_size)?;
+        } else if cached(&configs[0]) {
             for config in &configs {
-                let tree_c_store = DiskStore::<<Tree::Hasher as Hasher>::Domain>::new_from_disk(
-                    tree_c_size,
-                    Tree::Arity::to_usize(),
-                    &config,
-                )
-                .context("tree_c")?;
-                // Note: from_data_store requires the base tree leaf count
-                let tree_c = DiskTree::<
-                    Tree::Hasher,
-                    Tree::Arity,
-                    Tree::SubTreeArity,
-                    Tree::TopTreeArity,
-                >::from_data_store(
-                    tree_c_store,
-                    get_merkle_tree_leafs(tree_c_size, Tree::Arity::to_usize())?,
-                )
-                .context("tree_c")?;
-                tree_c.delete(config.clone()).context("tree_c")?;
+                // Trees with sub-trees cannot be instantiated and deleted via the existing tree interface since
+                // knowledge of how the base trees are split exists outside of merkle light.  For now, we manually
+                // remove each on disk tree file since we know where they are here.
+                let tree_c_path = StoreConfig::data_path(&config.path, &config.id);
+                remove_file(&tree_c_path)
+                    .with_context(|| format!("Failed to delete {:?}", &tree_c_path))?
             }
-            trace!("tree c deleted");
         }
+        trace!("tree c deleted");
 
         for i in 0..t_aux.labels.labels.len() {
             let cur_config = t_aux.labels.labels[i].clone();
@@ -725,6 +737,7 @@ pub fn generate_replica_id<H: Hasher, T: AsRef<[u8]>>(
     sector_id: u64,
     ticket: &[u8; 32],
     comm_d: T,
+    porep_seed: &[u8; 32],
 ) -> H::Domain {
     use sha2::{Digest, Sha256};
 
@@ -733,6 +746,7 @@ pub fn generate_replica_id<H: Hasher, T: AsRef<[u8]>>(
         .chain(&sector_id.to_be_bytes()[..])
         .chain(ticket)
         .chain(AsRef::<[u8]>::as_ref(&comm_d))
+        .chain(porep_seed)
         .result();
 
     bytes_into_fr_repr_safe(hash.as_ref()).into()
