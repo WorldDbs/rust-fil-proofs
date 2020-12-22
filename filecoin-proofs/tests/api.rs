@@ -52,6 +52,12 @@ fn test_seal_lifecycle_32kib_top_8_8_2() -> Result<()> {
 
 //#[test]
 //#[ignore]
+//fn test_seal_lifecycle_512mib_top_8_0_0() -> Result<()> {
+//    seal_lifecycle::<SectorShape512MiB>(SECTOR_SIZE_512_MIB)
+//}
+
+//#[test]
+//#[ignore]
 //fn test_seal_lifecycle_32gib_top_8_8_0() -> Result<()> {
 //    seal_lifecycle::<SectorShape32GiB>(SECTOR_SIZE_32_GIB)
 //}
@@ -349,7 +355,7 @@ fn create_seal<R: Rng, Tree: 'static + MerkleTreeTrait>(
     )?;
 
     let piece_infos = vec![piece_info];
-
+    let arbitrary_porep_id = [28; 32];
     let sealed_sector_file = NamedTempFile::new()?;
     let mut unseal_file = NamedTempFile::new()?;
     let config = PoRepConfig {
@@ -357,6 +363,7 @@ fn create_seal<R: Rng, Tree: 'static + MerkleTreeTrait>(
         partitions: PoRepProofPartitions(
             *POREP_PARTITIONS.read().unwrap().get(&sector_size).unwrap(),
         ),
+        porep_id: arbitrary_porep_id,
     };
 
     let cache_dir = tempfile::tempdir().unwrap();
