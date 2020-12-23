@@ -2,7 +2,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughpu
 use ff::Field;
 use paired::bls12_381::Fr;
 use rand::thread_rng;
-use storage_proofs_core::drgraph::new_seed;
 use storage_proofs_core::fr32::fr_into_bytes;
 use storage_proofs_core::hasher::sha256::Sha256Hasher;
 use storage_proofs_core::hasher::{Domain, Hasher};
@@ -23,7 +22,7 @@ fn pregenerate_data<H: Hasher>(degree: usize) -> Pregenerated<H> {
         .collect();
     let replica_id: H::Domain = H::Domain::random(&mut rng);
 
-    let graph = StackedBucketGraph::<H>::new_stacked(size, 6, 8, new_seed()).unwrap();
+    let graph = StackedBucketGraph::<H>::new_stacked(size, 6, 8, [32; 32]).unwrap();
 
     Pregenerated {
         data,
@@ -54,7 +53,17 @@ fn kdf_benchmark(c: &mut Criterion) {
         let graph = &graph;
         let replica_id = replica_id.clone();
 
-        b.iter(|| black_box(create_label_exp(graph, &replica_id, &*exp_data, data, 1)))
+        b.iter(|| {
+            black_box(create_label_exp(
+                graph,
+                None,
+                &replica_id,
+                &*exp_data,
+                data,
+                1,
+                2,
+            ))
+        })
     });
 
     group.bench_function("non-exp", |b| {
@@ -62,7 +71,7 @@ fn kdf_benchmark(c: &mut Criterion) {
         let graph = &graph;
         let replica_id = replica_id.clone();
 
-        b.iter(|| black_box(create_label(graph, &replica_id, &mut data, 1)))
+        b.iter(|| black_box(create_label(graph, None, &replica_id, &mut data, 1, 2)))
     });
 
     group.finish();
