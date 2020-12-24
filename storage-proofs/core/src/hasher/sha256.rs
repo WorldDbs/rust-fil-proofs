@@ -72,7 +72,7 @@ impl AsRef<Sha256Domain> for Sha256Domain {
 }
 
 impl Sha256Domain {
-    pub fn trim_to_fr32(&mut self) {
+    fn trim_to_fr32(&mut self) {
         // strip last two bits, to ensure result is in Fr.
         self.0[31] &= 0b0011_1111;
     }
@@ -146,10 +146,6 @@ impl Domain for Sha256Domain {
     fn random<R: RngCore>(rng: &mut R) -> Self {
         // generating an Fr and converting it, to ensure we stay in the field
         Fr::random(rng).into()
-    }
-
-    fn into_repr(self) -> FrRepr {
-        crate::fr32::bytes_into_fr_repr_safe(&self.0)
     }
 }
 
