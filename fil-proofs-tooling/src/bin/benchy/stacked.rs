@@ -26,6 +26,7 @@ use storage_proofs::porep::stacked::{
 use storage_proofs::porep::PoRep;
 use storage_proofs::proof::ProofScheme;
 use storage_proofs::test_helper::setup_replica;
+use storage_proofs::util::default_rows_to_discard;
 use tempfile::TempDir;
 
 fn dump_proof_bytes<Tree: MerkleTreeTrait>(
@@ -116,15 +117,16 @@ where
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
+            default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         let replica_id = H::Domain::random(rng);
+        let arbitrary_porep_id = [11; 32];
         let sp = stacked::SetupParams {
             nodes,
             degree: BASE_DEGREE,
             expansion_degree: EXP_DEGREE,
-            seed: new_seed(),
+            porep_id: arbitrary_porep_id,
             layer_challenges: layer_challenges.clone(),
         };
 
