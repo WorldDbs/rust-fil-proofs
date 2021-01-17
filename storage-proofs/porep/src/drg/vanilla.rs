@@ -80,8 +80,7 @@ pub struct DrgParams {
 
     pub expansion_degree: usize,
 
-    // Random seed
-    pub seed: [u8; 28],
+    pub porep_id: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -250,7 +249,7 @@ where
             sp.drg.nodes,
             sp.drg.degree,
             sp.drg.expansion_degree,
-            sp.drg.seed,
+            sp.drg.porep_id,
         )?;
 
         Ok(PublicParams::new(graph, sp.private, sp.challenges_count))
@@ -614,13 +613,13 @@ mod tests {
     use rand_xorshift::XorShiftRng;
     use storage_proofs_core::{
         cache_key::CacheKey,
-        drgraph::{new_seed, BucketGraph, BASE_DEGREE},
+        drgraph::{BucketGraph, BASE_DEGREE},
         fr32::fr_into_bytes,
         hasher::{Blake2sHasher, PedersenHasher, Sha256Hasher},
         merkle::{BinaryMerkleTree, MerkleTreeTrait},
         table_tests,
         test_helper::setup_replica,
-        util::data_at_node,
+        util::{data_at_node, default_rows_to_discard},
     };
     use tempfile;
 
@@ -640,7 +639,7 @@ mod tests {
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
+            default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
@@ -652,7 +651,7 @@ mod tests {
                 nodes,
                 degree: BASE_DEGREE,
                 expansion_degree: 0,
-                seed: new_seed(),
+                porep_id: [32; 32],
             },
             private: false,
             challenges_count: 1,
@@ -719,7 +718,7 @@ mod tests {
         let config = StoreConfig::new(
             cache_dir.path(),
             CacheKey::CommDTree.to_string(),
-            StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
+            default_rows_to_discard(nodes, BINARY_ARITY),
         );
 
         // Generate a replica path.
@@ -731,7 +730,7 @@ mod tests {
                 nodes: data.len() / 32,
                 degree: BASE_DEGREE,
                 expansion_degree: 0,
-                seed: new_seed(),
+                porep_id: [32; 32],
             },
             private: false,
             challenges_count: 1,
@@ -797,7 +796,6 @@ mod tests {
             let rng = &mut XorShiftRng::from_seed(crate::TEST_SEED);
             let degree = BASE_DEGREE;
             let expansion_degree = 0;
-            let seed = new_seed();
 
             let replica_id: <Tree::Hasher as Hasher>::Domain =
                 <Tree::Hasher as Hasher>::Domain::random(rng);
@@ -811,7 +809,7 @@ mod tests {
             let config = StoreConfig::new(
                 cache_dir.path(),
                 CacheKey::CommDTree.to_string(),
-                StoreConfig::default_rows_to_discard(nodes, BINARY_ARITY),
+                default_rows_to_discard(nodes, BINARY_ARITY),
             );
 
             // Generate a replica path.
@@ -825,7 +823,7 @@ mod tests {
                     nodes,
                     degree,
                     expansion_degree,
-                    seed,
+                    porep_id: [32; 32],
                 },
                 private: false,
                 challenges_count: 2,
@@ -856,10 +854,7 @@ mod tests {
             let priv_inputs = PrivateInputs::<Tree::Hasher> {
                 tree_d: &aux.tree_d,
                 tree_r: &aux.tree_r,
-                tree_r_config_rows_to_discard: StoreConfig::default_rows_to_discard(
-                    nodes,
-                    BINARY_ARITY,
-                ),
+                tree_r_config_rows_to_discard: default_rows_to_discard(nodes, BINARY_ARITY),
             };
 
             let real_proof = DrgPoRep::<Tree::Hasher, _>::prove(&pp, &pub_inputs, &priv_inputs)
