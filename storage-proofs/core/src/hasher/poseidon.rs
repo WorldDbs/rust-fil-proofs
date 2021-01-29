@@ -166,10 +166,6 @@ impl Domain for PoseidonDomain {
         // generating an Fr and converting it, to ensure we stay in the field
         Fr::random(rng).into()
     }
-
-    fn into_repr(self) -> FrRepr {
-        self.0
-    }
 }
 
 impl Element for PoseidonDomain {
@@ -482,18 +478,18 @@ mod tests {
         assert_eq!(
             t.read_at(4).unwrap().0,
             FrRepr([
-                0x0074c5df8d1409d6,
-                0xec350e05f426fe9f,
-                0xf4ff46924ed13c3b,
-                0x26f151b2da64551c
+                0xb339ff6079800b5e,
+                0xec5907b3dc3094af,
+                0x93c003cc74a24f26,
+                0x042f94ffbe786bc3,
             ])
         );
 
         let expected = FrRepr([
-            0xc799a0ef93d38c97,
-            0x2046c1ad563008c1,
-            0xac1b4efc5caeca2e,
-            0x7214887233dae5bb,
+            0xefbb8be3e291e671,
+            0x77cc72b8cb2b5ad2,
+            0x30eb6385ae6b74ae,
+            0x1effebb7b26ad9eb,
         ]);
         let actual = t.read_at(6).unwrap().0;
 
@@ -556,10 +552,10 @@ mod tests {
         assert_eq!(
             hashed,
             PoseidonDomain(FrRepr([
-                0x20439c7814ace1c3,
-                0x2d09a34b3f2a80a1,
-                0xd0417bf72eaaf267,
-                0x59168209179c3a5a
+                0x351c54133b332c90,
+                0xc26f6d625f4e8195,
+                0x5fd9623643ed9622,
+                0x59f42220e09ff6f7,
             ]))
         );
     }
@@ -592,7 +588,7 @@ mod tests {
         );
 
         assert!(cs.is_satisfied());
-        let expected_constraints = 2_777;
+        let expected_constraints = 2_771;
         let actual_constraints = cs.num_constraints();
 
         assert_eq!(expected_constraints, actual_constraints);
