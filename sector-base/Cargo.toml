@@ -1,0 +1,23 @@
+[package]
+name = "sector-base"
+version = "0.1.0"
+authors = ["dignifiedquire <dignifiedquire@gmail.com>"]
+license = "MIT OR Apache-2.0"
+
+edition = "2018"
+
+[dependencies]
+bitvec = "0.5"
+failure = "0.1"
+itertools = "0.7.3"
+libc = "0.2"
+rand = "0.4"
+storage-proofs = { path = "../storage-proofs" }
+ffi-toolkit = { path = "../ffi-toolkit" }
+
+[dependencies.pairing]
+version = "0.14.2"
+features = ["expose-arith"]
+
+[dev-dependencies]
+tempfile = "*"
