@@ -1,45 +1,33 @@
-version: 2.1
 
+version: 2
 jobs:
-  ensure_groth_parameters_and_keys_linux:
-    docker:
-      - image: filecoin/rust:latest
-    working_directory: /mnt/crate
-    resource_class: 2xlarge+
-    steps:
-      - configure_environment_variables
-      - checkout
-      - restore_parameter_cache
-      - ensure_filecoin_parameters
-      - save_parameter_cache
   cargo_fetch:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
-          no_output_timeout: 30m
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
       - run: rustup install $(cat rust-toolchain)
       - run: rustup default $(cat rust-toolchain)
       - run: rustup component add rustfmt-preview
-      - run: rustup component add clippy
+      - run: rustup component add clippy-preview
       - run: cargo update
       - run: cargo fetch
+      - run: rustc +stable --version
       - run: rustc +$(cat rust-toolchain) --version
       - persist_to_workspace:
           root: "."
           paths:
             - Cargo.lock
       - save_cache:
-          key: cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+          key: cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
           paths:
             - /root/.cargo
             - /root/.rustup
@@ -47,19 +35,20 @@ jobs:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
-      - restore_parameter_cache
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+      - restore_cache:
+          keys:
+            - parameter-cache-{{ .Revision }}
       - run:
-          name: Test
-          command: cargo +$(cat rust-toolchain) test --verbose --workspace
+          name: Test (stable)
+          command: cargo +stable test --verbose --frozen --all
           no_output_timeout: 15m
       - run:
           name: Prune the output files
@@ -76,152 +65,114 @@ jobs:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
-      - restore_parameter_cache
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - parameter-cache-{{ .Revision }}
       - run:
-          name: Test in release profile
+          name: Test (stable) in release profile
           command: |
-            cargo +$(cat rust-toolchain) test --verbose --release --workspace
-            RUSTFLAGS="-D warnings" cargo +$(cat rust-toolchain) build --examples --release --workspace
+            cargo +stable test --verbose --release --frozen --all
+            cargo +stable build --examples --release --frozen --all
+
+  ffi_regression:
+    docker:
+      - image: filecoin/rust:latest
+    working_directory: /mnt/crate
+    resource_class: xlarge
+    steps:
+      - checkout
+      - attach_workspace:
+          at: "."
+      - restore_cache:
+          keys:
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - parameter-cache-{{ .Revision }}
+      - restore_cache:
+          keys:
+            - parameter-cache-{{ .Revision }}
+      - run:
+          name: run regression tests (examples) against FFI-exposed filecoin-proofs API
+          command: RUSTFLAGS="-Z sanitizer=leak" cargo run --release --package filecoin-proofs --example ffi --target x86_64-unknown-linux-gnu
 
   test_ignored_release:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
-    parameters:
-      crate:
-        type: string
-      features:
-        type: string
-        default: ""
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
-      - restore_parameter_cache
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - parameter-cache-{{ .Revision }}
       - run:
-          name: Test ignored in release profile
-          command: |
-              cd << parameters.crate >>
-              cargo test --release << parameters.features >> -- --ignored
-          environment:
-            RUST_TEST_THREADS: 1
-          no_output_timeout: 30m
+          name: Test (stable) in release profile
+          command: cargo +stable test --verbose --release --frozen --all -- --ignored
+      - save_cache:
+          key: parameter-cache-{{ .Revision }}
+          paths:
+            - /root/.filecoin-parameter-cache
 
-  bench:
+  test_nightly:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
-      - restore_parameter_cache
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+      - restore_cache:
+          keys:
+            - parameter-cache-{{ .Revision }}
       - run:
-          name: Benchmarks
-          command: cargo +$(cat rust-toolchain) build --benches --verbose --workspace
+          name: Test (nightly)
+          command: cargo +$(cat rust-toolchain) test --verbose --frozen --all
           no_output_timeout: 15m
 
-  metrics_capture:
+  bench_nightly:
     docker:
       - image: filecoin/rust:latest
-    environment:
-      RUSTFLAGS: -Awarnings -C target-cpu=native
     working_directory: /mnt/crate
-    resource_class: 2xlarge+
+    resource_class: xlarge
     steps:
-      - add_ssh_keys:
-          fingerprints:
-            - "f8:db:3c:6d:f9:74:2c:9e:07:42:3f:3f:23:07:f7:6d"
-      - run:
-          name: Add benchmark server's public key to known hosts
-          command: |
-            mkdir -p ~/.ssh/
-            if [[ ! -f ~/.ssh/known_hosts ]] || ! grep "${BENCHMARK_SERVER_IP_ADDR}" ~/.ssh/known_hosts; then
-              echo "
-            ${BENCHMARK_SERVER_RSA_FINGERPRINT}
-              " >> ~/.ssh/known_hosts
-            fi
       - checkout
       - attach_workspace:
           at: "."
+      - restore_cache:
+          keys:
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+      - restore_cache:
+          keys:
+            - parameter-cache-{{ .Revision }}
       - run:
-          name: Install jq
-          command: apt-get install time jq -yqq
-      - run:
-          name: Ensure existence of Groth parameters and keys on remote host
-          command: |
-            ./fil-proofs-tooling/scripts/run-remote.sh "${CIRCLE_BRANCH}" "${BENCHMARK_SERVER_SSH_USERNAME}@${BENCHMARK_SERVER_IP_ADDR}" cargo run --release --package filecoin-proofs --bin=paramcache -- --params-for-sector-sizes=$((512*1024*1024))
-          no_output_timeout: 60m
-      - run:
-          name: Run hash-constraints benchmarks on remote host
-          command: |
-            ./fil-proofs-tooling/scripts/run-remote.sh "${CIRCLE_BRANCH}" "${BENCHMARK_SERVER_SSH_USERNAME}@${BENCHMARK_SERVER_IP_ADDR}" ./fil-proofs-tooling/scripts/benchy.sh hash-constraints > hash-constraints.json
-            cat hash-constraints.json
-          no_output_timeout: 60m
-      - run:
-          name: Run micro benchmarks
-          command: |
-            ./fil-proofs-tooling/scripts/run-remote.sh "${CIRCLE_BRANCH}" "${BENCHMARK_SERVER_SSH_USERNAME}@${BENCHMARK_SERVER_IP_ADDR}" ./fil-proofs-tooling/scripts/micro.sh > micro-benchmarks.json
-            cat micro-benchmarks.json
-          no_output_timeout: 60m
-      - run:
-          name: Run stacked benchmarks using 512MiB sectors
-          command: |
-            ./fil-proofs-tooling/scripts/run-remote.sh "${CIRCLE_BRANCH}" "${BENCHMARK_SERVER_SSH_USERNAME}@${BENCHMARK_SERVER_IP_ADDR}" ./fil-proofs-tooling/scripts/benchy.sh stacked --size=$((512*1024)) > stacked-benchmarks.json
-            cat stacked-benchmarks.json
-          no_output_timeout: 60m
-      - run:
-          name: Run Window PoST benchmarks using a 512MiB sector
-          command: |
-            ./fil-proofs-tooling/scripts/run-remote.sh "${CIRCLE_BRANCH}" "${BENCHMARK_SERVER_SSH_USERNAME}@${BENCHMARK_SERVER_IP_ADDR}" ./fil-proofs-tooling/scripts/benchy.sh window-post --size=$((512*1024)) > window-post-benchmarks.json
-            cat window-post-benchmarks.json
-          no_output_timeout: 60m
-      - run:
-          name: Aggregate benchmarks into single JSON document
-          command: |
-            ./fil-proofs-tooling/scripts/aggregate-benchmarks.sh stacked-benchmarks.json micro-benchmarks.json hash-constraints.json window-post-benchmarks.json > aggregated-benchmarks.json
-            cat aggregated-benchmarks.json
-      - store_artifacts:
-          path: stacked-benchmarks.json
-      - store_artifacts:
-          path: hash-constraints.json
-      - store_artifacts:
-          path: micro-benchmarks.json
-      - store_artifacts:
-          path: aggregated-benchmarks.json
+          name: Benchmarks (nightly)
+          command: cargo +$(cat rust-toolchain) build --benches --verbose --frozen --all
+          no_output_timeout: 15m
 
   rustfmt:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
       - run:
           name: Run cargo fmt
           command: cargo fmt --all -- --check
@@ -230,25 +181,51 @@ jobs:
     docker:
       - image: filecoin/rust:latest
     working_directory: /mnt/crate
-    resource_class: 2xlarge
+    resource_class: xlarge
     steps:
-      - configure_environment_variables
       - checkout
       - attach_workspace:
           at: "."
       - restore_cache:
           keys:
-            - cargo-v27g-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
       - run:
           name: Run cargo clippy
-          command: cargo +$(cat rust-toolchain) clippy --workspace
-  test_darwin:
+          command: cargo clippy --all
+
+  build_linux_release:
+    docker:
+      - image: filecoin/rust:latest
+    working_directory: /mnt/crate
+    resource_class: xlarge
+    steps:
+      - checkout
+      - attach_workspace:
+          at: "."
+      - restore_cache:
+          keys:
+            - cargo-v7-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+      - run:
+          name: Build (release)
+          command: cargo +$(cat rust-toolchain) build --release --verbose --frozen --all
+      - run:
+          name: Install jq
+          command: apt-get install jq -yqq
+      - run:
+          name: Run publish-release.sh
+          command: bash ./scripts/publish-release.sh
+
+  build_darwin_release:
     macos:
       xcode: "10.0.0"
     working_directory: ~/crate
     resource_class: large
     steps:
-      - configure_environment_variables
+      - run:
+          name: Configure environment variables
+          command: |
+            echo 'export PATH="${HOME}/.cargo/bin:${HOME}/.bin:${PATH}"' >> $BASH_ENV
+            echo 'export CIRCLE_ARTIFACTS="/tmp"' >> $BASH_ENV
       - checkout
       - run:
           name: Install Rust
@@ -259,54 +236,22 @@ jobs:
       - run: cargo update
       - run: cargo fetch
       - run:
-          name: Test Darwin
-          command: |
-            sudo ulimit -n 20000
-            sudo ulimit -u 20000
-            ulimit -n 20000
-            cargo +$(cat rust-toolchain) test --release --verbose --workspace
-          no_output_timeout: 2h
-
-commands:
-  ensure_filecoin_parameters:
-    steps:
-      - configure_environment_variables
+          name: Build (release)
+          command: cargo +$(cat rust-toolchain) build --release --verbose --frozen --all
       - run:
-          name: Build paramcache if it doesn't already exist
+          name: Install jq
           command: |
-            set -x; test -f ~/paramcache.awesome \
-            || (cargo build --release --workspace && find . -type f -name paramcache | xargs -I {} mv {} ~/paramcache.awesome)
+            mkdir $HOME/.bin
+            curl --location https://github.com/stedolan/jq/releases/download/jq-1.6/jq-osx-amd64 --output $HOME/.bin/jq
+            chmod +x $HOME/.bin/jq
       - run:
-          name: Obtain filecoin groth parameters
-          command: ~/paramcache.awesome --params-for-sector-sizes='2048,4096,16384,32768'
-          no_output_timeout: 60m
-  save_parameter_cache:
-    steps:
-      - save_cache:
-          key: proof-params-v27g-{{ checksum "filecoin-proofs/parameters.json" }}-{{ arch }}
-          paths:
-            - "~/paramcache.awesome"
-            - "~/filecoin-proof-parameters/"
-  restore_parameter_cache:
-    steps:
-      - configure_environment_variables
-      - restore_cache:
-         keys:
-            - proof-params-v27g-{{ checksum "filecoin-proofs/parameters.json" }}-{{ arch }}
-  configure_environment_variables:
-    steps:
-      - run:
-          name: Configure environment variables
-          command: |
-            echo 'export FIL_PROOFS_PARAMETER_CACHE="${HOME}/filecoin-proof-parameters/"' >> $BASH_ENV
-            echo 'export PATH="${HOME}/.cargo/bin:${PATH}"' >> $BASH_ENV
-            echo 'export RUST_LOG=info' >> $BASH_ENV
+          name: Run publish-release.sh
+          command: bash ./scripts/publish-release.sh
 
 workflows:
-  version: 2.1
+  version: 2
   test_all:
     jobs:
-      - ensure_groth_parameters_and_keys_linux
       - cargo_fetch
       - rustfmt:
           requires:
@@ -317,44 +262,24 @@ workflows:
       - test_release:
           requires:
             - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
-      - test_ignored_release:
-          name: test_ignored_release_storage_proofs_post
-          crate: "storage-proofs/post"
+      - ffi_regression:
           requires:
             - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
       - test_ignored_release:
-          name: test_ignored_release_storage_proofs_core
-          crate: "storage-proofs/core"
           requires:
             - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
-      - test_ignored_release:
-          name: test_ignored_release_storage_proofs_porep
-          crate: "storage-proofs/porep"
-          requires:
-            - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
-      - test_ignored_release:
-          name: test_ignored_release_filecoin_proofs
-          crate: "filecoin-proofs"
-          requires:
-            - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
       - test:
           requires:
             - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
-      - bench:
+      - test_nightly:
           requires:
             - cargo_fetch
-            - ensure_groth_parameters_and_keys_linux
-      - test_darwin
-      - metrics_capture:
+      - bench_nightly:
           requires:
             - cargo_fetch
-          filters:
-            branches:
-              only:
-                - master
+      - build_linux_release:
+          requires:
+            - cargo_fetch
+      - build_darwin_release:
+          requires:
+            - cargo_fetch
