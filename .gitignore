@@ -5,6 +5,4 @@ Cargo.lock
 **/*.h
 heaptrack*
 .bencher
-*.profile
-*.heap
-rust-fil-proofs.config.toml
+logging-toolkit
