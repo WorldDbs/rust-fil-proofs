@@ -1,24 +1,78 @@
 [package]
 name = "storage-proofs"
-description = "Implementations of Proofs of Storage"
-version = "2.0.0"
-authors = ["dignifiedquire <dignifiedquire@gmail.com>", "laser <l@s3r.com>", "porcuquine <porcuquine@users.noreply.github.com>"]
+version = "0.1.0"
+authors = ["dignifiedquire <dignifiedquire@gmail.com>"]
 license = "MIT OR Apache-2.0"
+
 edition = "2018"
-repository = "https://github.com/filecoin-project/rust-fil-proofs"
-readme = "README.md"
 
 [dependencies]
-storage-proofs-core = { path = "./core", version = "2.0.0" }
-storage-proofs-post = { path = "./post", version = "2.0.0" }
-storage-proofs-porep = { path = "./porep", version = "2.0.0" }
+logging-toolkit = { path = "../logging-toolkit" }
+bitvec = "0.5"
+sapling-crypto = { git = "https://github.com/zcash-hackworks/sapling-crypto", branch = "master" }
+rand = "0.4"
+libc = "0.2"
+merkle_light = { git = "https://github.com/filecoin-project/merkle_light", branch = "master" }
+failure = "0.1"
+bellman = "0.1"
+byteorder = "1"
+crossbeam-utils = "0.6"
+itertools = "0.7.3"
+lazy_static = "1.2"
+memmap = "0.6"
+num-bigint = "0.2"
+num-traits = "0.2"
+clap = "2"
+colored = "1.6"
+aes = "0.1"
+block-modes = "0.1"
+sha2 = "0.8"
+blake2 = "0.8"
+pbr = "1.0"
+tempfile = "3"
+fs2 = "0.4"
+rayon = "1.0.0"
+slog = { version = "2.4.1", features = ["max_level_trace", "release_max_level_trace"] }
+serde = "1.0"
+serde_derive = "1.0"
+base64 = "0.10.0"
+
+[dependencies.pairing]
+version = "0.14.2"
+features = ["expose-arith"]
 
 [features]
-default = ["gpu"]
-simd = ["storage-proofs-core/simd"]
-asm = ["storage-proofs-core/asm"]
-gpu = ["storage-proofs-core/gpu"]
-measurements = ["storage-proofs-core/measurements"]
-profile = ["measurements"]
+default = ["u128-support"]
+u128-support = ["pairing/u128-support"]
+simd = ["blake2/simd_opt"]
+asm = ["sha2/sha2-asm", "blake2/simd_asm"]
 
+[dev-dependencies]
+proptest = "0.7"
+criterion = "0.2"
+sector-base = { path = "../sector-base" }
+serde_json = "1.0"
 
+[[bench]]
+name = "pedersen"
+harness = false
+
+[[bench]]
+name = "sha256"
+harness = false
+
+[[bench]]
+name = "blake2s"
+harness = false
+
+[[bench]]
+name = "drgraph"
+harness = false
+
+[[bench]]
+name = "preprocessing"
+harness = false
+
+[[bench]]
+name = "sloth"
+harness = false
