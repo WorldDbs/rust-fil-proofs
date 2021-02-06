@@ -1,29 +1,42 @@
 #![deny(clippy::all, clippy::perf, clippy::correctness)]
+#![allow(clippy::unreadable_literal)]
+#![warn(clippy::type_complexity, clippy::too_many_arguments)]
 
-mod api;
-mod caches;
-mod commitment_reader;
+extern crate ffi_toolkit;
+extern crate logging_toolkit;
+extern crate sector_base;
+extern crate storage_proofs;
 
-pub mod constants;
-pub mod fr32;
-pub mod fr32_reader;
-pub mod param;
-pub mod parameters;
-pub mod pieces;
+#[macro_use]
+extern crate lazy_static;
+extern crate bellman;
+extern crate libc;
+extern crate pairing;
+extern crate rand;
+extern crate sapling_crypto;
+extern crate tempfile;
+#[macro_use]
+extern crate failure;
+extern crate byteorder;
+extern crate itertools;
+extern crate serde;
+extern crate serde_cbor;
+#[macro_use]
+extern crate serde_derive;
+extern crate blake2;
+extern crate slog;
+
+pub mod api;
+pub mod error;
 pub mod serde_big_array;
-pub mod singletons;
-pub mod types;
 
-pub use self::api::*;
-pub use self::commitment_reader::*;
-pub use self::constants::SINGLE_PARTITION_PROOF_LEN;
-pub use self::constants::*;
-pub use self::param::{ParameterData, ParameterMap};
-pub use self::types::*;
+use logging_toolkit::make_logger;
+use slog::Logger;
 
-pub use storage_proofs;
-
-#[cfg(test)]
-pub(crate) const TEST_SEED: [u8; 16] = [
-    0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc, 0xe5,
-];
+lazy_static! {
+    pub static ref FCP_LOG: Logger = make_logger(
+        "filecoin-proofs",
+        "RUST_PROOFS_LOG_JSON",
+        "RUST_PROOFS_MIN_LOG_LEVEL"
+    );
+}
