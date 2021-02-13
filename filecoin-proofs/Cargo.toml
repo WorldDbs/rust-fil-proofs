@@ -1,54 +1,84 @@
 [package]
 name = "filecoin-proofs"
-version = "0.1.0"
-authors = ["dignifiedquire <dignifiedquire@gmail.com>"]
+description = "The Filecoin specific aspects of storage-proofs, including a C based FFI, to generate and verify proofs."
+version = "7.0.1"
+authors = ["dignifiedquire <dignifiedquire@gmail.com>", "laser <l@s3r.com>", "porcuquine <porcuquine@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
-
 edition = "2018"
-
-[lib]
-crate-type = ["rlib", "staticlib", "cdylib"]
+repository = "https://github.com/filecoin-project/rust-fil-proofs"
+readme = "README.md"
 
 [dependencies]
-sector-base = { path = "../sector-base" }
-storage-proofs = { path = "../storage-proofs" }
-ffi-toolkit = { path = "../ffi-toolkit" }
-logging-toolkit = { path = "../logging-toolkit" }
-bitvec = "0.5"
-phase2 = "0.2.2"
-sapling-crypto = { git = "https://github.com/zcash-hackworks/sapling-crypto", branch = "master" }
-rand = "0.4"
-libc = "0.2"
-failure = "0.1"
-bellman = "0.1"
+storage-proofs-core = { path = "../storage-proofs-core", version = "^7.0.0", default-features = false}
+storage-proofs-porep = { path = "../storage-proofs-porep", version = "^7.0.0", default-features = false }
+storage-proofs-post = { path = "../storage-proofs-post", version = "^7.0.0", default-features = false }
+filecoin-hashers = { version = "^2.0.0", path = "../filecoin-hashers", default-features = false, features = ["poseidon", "sha256"] }
+bitvec = "0.17"
+rand = "0.7"
 lazy_static = "1.2"
-memmap = "0.6"
-clap = "2"
-colored = "1.6"
-pbr = "1.0"
-tempfile = "3"
+memmap = "0.7"
 byteorder = "1"
-itertools = "0.7.3"
-serde_cbor = "0.9.0"
-serde = { version = "1", features = ["rc"] }
-serde_derive = "1.0"
-blake2 = "0.8"
-slog = { version = "2.4.1", features = ["max_level_trace", "release_max_level_trace"] }
+itertools = "0.9"
+serde = { version = "1.0", features = ["rc", "derive"] }
+serde_json = "1.0"
+ff = { version = "0.2.3", package = "fff" }
+blake2b_simd = "0.5"
+bellperson = { version = "0.13", default-features = false }
+log = "0.4.7"
+fil_logger = "0.1"
+rayon = "1.1.0"
+blake2s_simd = "0.5.8"
+hex = "0.4.0"
+merkletree = "0.21.0"
+bincode = "1.1.2"
+anyhow = "1.0.23"
+rand_xorshift = "0.2.0"
+sha2 = "0.9.1"
+typenum = "1.11.2"
+gperftools = { version = "0.2", optional = true }
+generic-array = "0.14.4"
+groupy = "0.3.0"
+byte-slice-cast = "1.0.0"
+fr32 = { path = "../fr32", version = "^0.2.0", default-features = false }
 
 [dev-dependencies]
-gperftools = { git = "https://github.com/dignifiedquire/rust-gperftools" }
-scopeguard = "0.3.3"
-
-[dependencies.pairing]
-version = "0.14.2"
-features = ["expose-arith"]
-
-[build-dependencies]
-bindgen = "0.46"
-cbindgen = "0.6.8"
+criterion = "0.3"
+rexpect = "0.4.0"
+pretty_assertions = "0.6.1"
+failure = "0.1.7"
+tempfile = "3"
 
 [features]
-default = []
-profile = []
-simd = ["storage-proofs/simd"]
-asm = ["storage-proofs/asm"]
+default = ["gpu", "pairing"]
+cpu-profile = ["gperftools"]
+heap-profile = ["gperftools/heap"]
+simd = ["storage-proofs-core/simd"]
+asm = ["storage-proofs-core/asm"]
+gpu = [
+    "storage-proofs-core/gpu",
+    "storage-proofs-porep/gpu",
+    "storage-proofs-post/gpu",
+    "bellperson/gpu",
+    "filecoin-hashers/gpu",
+    "fr32/gpu",
+]
+pairing = [
+    "storage-proofs-core/pairing",
+    "storage-proofs-porep/pairing",
+    "storage-proofs-post/pairing",
+    "bellperson/pairing",
+    "filecoin-hashers/pairing",
+    "fr32/pairing",
+]
+blst = [
+    "storage-proofs-core/blst",
+    "storage-proofs-porep/blst",
+    "storage-proofs-post/blst",
+    "bellperson/blst",
+    "filecoin-hashers/blst",
+    "fr32/blst",
+]
+
+[[bench]]
+name = "preprocessing"
+harness = false
