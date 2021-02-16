@@ -1,46 +1,13 @@
-[package]
-name = "proofs"
-version = "0.1.0"
-authors = ["dignifiedquire <dignifiedquire@gmail.com>"]
-license = "MIT OR Apache-2.0"
-
-edition = "2018"
-
-[dependencies]
-filecoin-proofs = { path = "./filecoin-proofs" }
-storage-proofs = { path = "./storage-proofs" }
-sector-base = { path = "./sector-base" }
-storage-backend = { path = "./storage-backend" }
-
-clap = "2"
-serde = "1"
-serde_derive = "1.0"
-serde_json = "1"
-toml = "0.4"
-failure = "0.1"
-permutate = "0.3"
-lazy_static = "1.2"
-glob = "0.2"
-human-size = "0.4"
-prettytable-rs = "0.8"
-
 [workspace]
+
 members = [
   "filecoin-proofs",
-  "storage-proofs",
-  "sector-base",
-  "storage-backend",
-  "ffi-toolkit"
+  "storage-proofs-core",
+  "storage-proofs-porep",
+  "storage-proofs-post",
+  "fil-proofs-tooling",
+  "fil-proofs-param",
+  "fr32",
+  "sha2raw",
+  "filecoin-hashers",
 ]
-
-[profile.test]
-opt-level = 1
-
-[profile.release]
-debug = true
-
-[features]
-default = []
-profile = ["filecoin-proofs/profile"]
-simd = ["storage-proofs/simd", "filecoin-proofs/simd"]
-asm = ["storage-proofs/asm", "filecoin-proofs/asm"]
