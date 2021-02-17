@@ -1,5 +1,6 @@
-use crate::fr32::to_unpadded_bytes;
-use crate::types::*;
+use fr32::to_unpadded_bytes;
+
+use crate::types::{PaddedBytesAmount, UnpaddedBytesAmount};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SectorSize(pub u64);
