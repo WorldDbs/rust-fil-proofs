@@ -1,19 +1,19 @@
+use std::cmp::min;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 
-use log::info;
-use rand::RngCore;
-use rayon::prelude::*;
-use tempfile::NamedTempFile;
-
-use filecoin_proofs::constants::POREP_PARTITIONS;
-use filecoin_proofs::types::{
-    MerkleTreeTrait, PaddedBytesAmount, PoRepConfig, SectorSize, UnpaddedBytesAmount,
-};
 use filecoin_proofs::{
     add_piece, seal_pre_commit_phase1, seal_pre_commit_phase2, validate_cache_for_precommit_phase2,
-    PieceInfo, PoRepProofPartitions, PrivateReplicaInfo, PublicReplicaInfo, SealPreCommitOutput,
+    MerkleTreeTrait, PaddedBytesAmount, PieceInfo, PoRepConfig, PoRepProofPartitions,
+    PrivateReplicaInfo, PublicReplicaInfo, SealPreCommitOutput, SectorSize, UnpaddedBytesAmount,
+    POREP_PARTITIONS,
 };
-use storage_proofs::sector::SectorId;
+use log::info;
+use rand::{random, thread_rng, RngCore};
+use rayon::prelude::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
+use storage_proofs_core::{api_version::ApiVersion, sector::SectorId};
+use tempfile::{tempdir, NamedTempFile};
 
 use crate::{measure, FuncMeasurement};
 
@@ -35,10 +35,10 @@ pub fn create_piece(piece_bytes: UnpaddedBytesAmount) -> NamedTempFile {
         let mut len = u64::from(piece_bytes) as usize;
         let chunk_size = 8 * 1024 * 1024;
         let mut buffer = vec![0u8; chunk_size];
-        rand::thread_rng().fill_bytes(&mut buffer);
+        thread_rng().fill_bytes(&mut buffer);
 
         while len > 0 {
-            let to_write = std::cmp::min(len, chunk_size);
+            let to_write = min(len, chunk_size);
             writer
                 .write_all(&buffer[..to_write])
                 .expect("failed to write buffer");
@@ -47,7 +47,10 @@ pub fn create_piece(piece_bytes: UnpaddedBytesAmount) -> NamedTempFile {
     }
     assert_eq!(
         u64::from(piece_bytes),
-        file.as_file().metadata().unwrap().len()
+        file.as_file()
+            .metadata()
+            .expect("failed to get file metadata")
+            .len()
     );
 
     file.as_file_mut()
@@ -65,12 +68,13 @@ pub fn create_piece(piece_bytes: UnpaddedBytesAmount) -> NamedTempFile {
 pub fn create_replica<Tree: 'static + MerkleTreeTrait>(
     sector_size: u64,
     porep_id: [u8; 32],
+    api_version: ApiVersion,
 ) -> (SectorId, PreCommitReplicaOutput<Tree>) {
     let (_porep_config, result) =
-        create_replicas::<Tree>(SectorSize(sector_size), 1, false, porep_id);
+        create_replicas::<Tree>(SectorSize(sector_size), 1, false, porep_id, api_version);
     // Extract the sector ID and replica output out of the result
     result
-        .unwrap()
+        .expect("create_replicas() failed when called with only_add==false")
         .0
         .pop()
         .expect("failed to create replica outputs")
@@ -82,6 +86,7 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
     qty_sectors: usize,
     only_add: bool,
     porep_id: [u8; 32],
+    api_version: ApiVersion,
 ) -> (
     PoRepConfig,
     Option<(
@@ -98,11 +103,12 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
         partitions: PoRepProofPartitions(
             *POREP_PARTITIONS
                 .read()
-                .unwrap()
+                .expect("poisoned read access")
                 .get(&u64::from(sector_size))
                 .expect("unknown sector size"),
         ),
         porep_id,
+        api_version,
     };
 
     let mut out: Vec<(SectorId, PreCommitReplicaOutput<Tree>)> = Default::default();
@@ -114,8 +120,8 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
     for i in 0..qty_sectors {
         info!("creating sector {}/{}", i, qty_sectors);
 
-        sector_ids.push(SectorId::from(rand::random::<u64>()));
-        cache_dirs.push(tempfile::tempdir().expect("failed to create cache dir"));
+        sector_ids.push(SectorId::from(random::<u64>()));
+        cache_dirs.push(tempdir().expect("failed to create cache dir"));
 
         let staged_file =
             NamedTempFile::new().expect("could not create temp file for staged sector");
@@ -154,7 +160,7 @@ pub fn create_replicas<Tree: 'static + MerkleTreeTrait>(
             sector_size_unpadded_bytes_ammount,
             &[],
         )
-        .unwrap();
+        .expect("failed to add piece");
         piece_infos.push(vec![info]);
     }
 
