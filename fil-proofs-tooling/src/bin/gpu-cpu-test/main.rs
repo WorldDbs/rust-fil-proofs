@@ -1,3 +1,6 @@
+//requires nightly, or later stable version
+//#![warn(clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::process::{self, Child, Command, Stdio};
 use std::str;
@@ -14,7 +17,10 @@ use filecoin_proofs::{
     WINNING_POST_SECTOR_COUNT,
 };
 use log::{debug, info};
-use storage_proofs::sector::SectorId;
+use storage_proofs_core::api_version::ApiVersion;
+use storage_proofs_core::sector::SectorId;
+
+const FIXED_API_VERSION: ApiVersion = ApiVersion::V1_0_0;
 
 type MerkleTree = SectorShape8MiB;
 const SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
@@ -25,6 +31,7 @@ const POST_CONFIG: PoStConfig = PoStConfig {
     sector_count: WINNING_POST_SECTOR_COUNT,
     typ: PoStType::Winning,
     priority: false,
+    api_version: FIXED_API_VERSION,
 };
 
 arg_enum! {
@@ -132,7 +139,8 @@ fn threads_mode(parallel: u8, gpu_stealing: bool) {
     let arbitrary_porep_id = [234; 32];
 
     // Create fixtures only once for both threads
-    let (sector_id, replica_output) = create_replica::<MerkleTree>(SECTOR_SIZE, arbitrary_porep_id);
+    let (sector_id, replica_output) =
+        create_replica::<MerkleTree>(SECTOR_SIZE, arbitrary_porep_id, FIXED_API_VERSION);
     let priv_replica_info = (sector_id, replica_output.private_replica_info);
 
     // Put each proof into it's own scope (the other one is due to the if statement)
@@ -154,7 +162,7 @@ fn threads_mode(parallel: u8, gpu_stealing: bool) {
     thread::sleep(timeout);
     info!("Waited long enough to kill all threads");
     for tx in senders {
-        tx.send(()).unwrap();
+        tx.send(()).expect("tx channel send failed");
     }
 
     for thread in &mut threads {
@@ -164,7 +172,7 @@ fn threads_mode(parallel: u8, gpu_stealing: bool) {
                 .name()
                 .unwrap_or(&format!("{:?}", handler.thread().id()))
                 .to_string();
-            let run_info = handler.join().unwrap();
+            let run_info = handler.join().expect("thread being joined has panicked");
             info!("Thread {} info: {:?}", thread_name, run_info);
             // Also print it, so that we can get that information in processes mode
             println!("Thread {} info: {:?}", thread_name, run_info);
@@ -190,11 +198,11 @@ fn processes_mode(parallel: u8, gpu_stealing: bool) {
 
     // Wait for all processes to finish and log their output
     for (name, child) in children {
-        let output = child.wait_with_output().unwrap();
+        let output = child.wait_with_output().expect("failed to wait for child");
         info!(
             "Process {} info: {}",
             name,
-            str::from_utf8(&output.stdout).unwrap()
+            str::from_utf8(&output.stdout).expect("failed to parse UTF-8")
         );
     }
 }
@@ -249,13 +257,13 @@ fn main() {
         )
         .get_matches();
 
-    let parallel = value_t!(matches, "parallel", u8).unwrap();
+    let parallel = value_t!(matches, "parallel", u8).expect("failed to get parallel");
     if parallel == 1 {
         info!("Running high priority proof only")
     } else {
         info!("Running high and low priority proofs in parallel")
     }
-    let gpu_stealing = value_t!(matches, "gpu-stealing", bool).unwrap();
+    let gpu_stealing = value_t!(matches, "gpu-stealing", bool).expect("failed to get gpu-stealing");
     if gpu_stealing {
         info!("Force low piority proofs to CPU")
     } else {
