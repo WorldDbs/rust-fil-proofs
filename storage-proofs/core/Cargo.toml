@@ -1,8 +1,7 @@
 [package]
 name = "storage-proofs-core"
-version = "2.0.0"
+version = "1.0.0-alpha.0"
 authors = ["dignifiedquire <me@dignifiedquire.com>"]
-description = "Core parts for proofs of storage"
 license = "MIT OR Apache-2.0"
 edition = "2018"
 repository = "https://github.com/filecoin-project/rust-fil-proofs"
@@ -13,7 +12,7 @@ bench = false
 
 [dependencies]
 rand = "0.7"
-merkletree = "0.20.0"
+merkletree = "0.18.0"
 byteorder = "1"
 config = "0.9.3"
 itertools = "0.9"
@@ -30,9 +29,9 @@ blake2b_simd = "0.5"
 blake2s_simd = "0.5"
 toml = "0.5"
 ff = { version = "0.2.1", package = "fff" }
-bellperson = "0.8.0"
+bellperson = "0.7.0"
 paired = { version = "0.19.0", features = ["serde"] }
-fil-sapling-crypto = "0.6.0"
+fil-sapling-crypto = "0.5.1"
 serde_json = "1.0"
 log = "0.4.7"
 rand_chacha = "0.2.1"
@@ -40,7 +39,7 @@ hex = "0.4.0"
 generic-array = "0.13.2"
 anyhow = "1.0.23"
 thiserror = "1.0.6"
-neptune = { git = "https://github.com/filecoin-project/neptune.git", branch="v1-0-candidate", features=["gpu"] }
+neptune = { version = "0.5.6", features = ["gpu"] }
 cpu-time = { version = "1.0", optional = true }
 
 [dev-dependencies]
@@ -50,7 +49,8 @@ femme = "1.2.0"
 bitvec = "0.17"
 rand_xorshift = "0.2.0"
 pretty_assertions = "0.6.1"
-sha2raw = { path = "../../sha2raw", version = "1.0.0" }
+storage-proofs-porep = { path = "../porep", version = "1.0.0-alpha.0" }
+sha2raw = { path = "../../sha2raw" }
 
 [features]
 default = ["gpu"]
@@ -75,6 +75,14 @@ harness = false
 
 [[bench]]
 name = "drgraph"
+harness = false
+
+[[bench]]
+name = "encode"
+harness = false
+
+[[bench]]
+name = "parents"
 harness = false
 
 [[bench]]
