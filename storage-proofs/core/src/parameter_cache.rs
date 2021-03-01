@@ -16,7 +16,7 @@ use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Bump this when circuits change to invalidate the cache.
-pub const VERSION: usize = 27;
+pub const VERSION: usize = 26;
 
 pub const PARAMETER_CACHE_ENV_VAR: &str = "FIL_PROOFS_PARAMETER_CACHE";
 pub const PARAMETER_CACHE_DIR: &str = "/var/tmp/filecoin-proof-parameters/";
@@ -134,7 +134,7 @@ fn ensure_ancestor_dirs_exist(cache_entry_path: PathBuf) -> Result<PathBuf> {
     Ok(cache_entry_path)
 }
 
-pub trait ParameterSetMetadata {
+pub trait ParameterSetMetadata: Clone {
     fn identifier(&self) -> String;
     fn sector_size(&self) -> u64;
 }
