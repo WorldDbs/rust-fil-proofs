@@ -1,4 +1,3 @@
-use std::fs::remove_file;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -37,7 +36,9 @@ pub struct SetupParams {
 
     pub expansion_degree: usize,
 
-    pub porep_id: [u8; 32],
+    // Random seed
+    pub seed: [u8; 28],
+
     pub layer_challenges: LayerChallenges,
 }
 
@@ -390,29 +391,6 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAux<Tree, G> {
             Path::new(&StoreConfig::data_path(&config.path, &config.id)).exists()
         };
 
-        let delete_tree_c_store = |config: &StoreConfig, tree_c_size: usize| -> Result<()> {
-            let tree_c_store = DiskStore::<<Tree::Hasher as Hasher>::Domain>::new_from_disk(
-                tree_c_size,
-                Tree::Arity::to_usize(),
-                &config,
-            )
-            .context("tree_c")?;
-            // Note: from_data_store requires the base tree leaf count
-            let tree_c = DiskTree::<
-                Tree::Hasher,
-                Tree::Arity,
-                Tree::SubTreeArity,
-                Tree::TopTreeArity,
-            >::from_data_store(
-                tree_c_store,
-                get_merkle_tree_leafs(tree_c_size, Tree::Arity::to_usize())?,
-            )
-            .context("tree_c")?;
-            tree_c.delete(config.clone()).context("tree_c")?;
-
-            Ok(())
-        };
-
         if cached(&t_aux.tree_d_config) {
             let tree_d_size = t_aux
                 .tree_d_config
@@ -432,26 +410,36 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAux<Tree, G> {
             trace!("tree d deleted");
         }
 
-        let tree_count = get_base_tree_count::<Tree>();
-        let tree_c_size = t_aux
-            .tree_c_config
-            .size
-            .context("tree_c config has no size")?;
-        let configs = split_config(t_aux.tree_c_config.clone(), tree_count)?;
-
         if cached(&t_aux.tree_c_config) {
-            delete_tree_c_store(&t_aux.tree_c_config, tree_c_size)?;
-        } else if cached(&configs[0]) {
+            let tree_c_size = t_aux
+                .tree_c_config
+                .size
+                .context("tree_c config has no size")?;
+
+            let tree_count = get_base_tree_count::<Tree>();
+            let configs = split_config(t_aux.tree_c_config.clone(), tree_count)?;
             for config in &configs {
-                // Trees with sub-trees cannot be instantiated and deleted via the existing tree interface since
-                // knowledge of how the base trees are split exists outside of merkle light.  For now, we manually
-                // remove each on disk tree file since we know where they are here.
-                let tree_c_path = StoreConfig::data_path(&config.path, &config.id);
-                remove_file(&tree_c_path)
-                    .with_context(|| format!("Failed to delete {:?}", &tree_c_path))?
+                let tree_c_store = DiskStore::<<Tree::Hasher as Hasher>::Domain>::new_from_disk(
+                    tree_c_size,
+                    Tree::Arity::to_usize(),
+                    &config,
+                )
+                .context("tree_c")?;
+                // Note: from_data_store requires the base tree leaf count
+                let tree_c = DiskTree::<
+                    Tree::Hasher,
+                    Tree::Arity,
+                    Tree::SubTreeArity,
+                    Tree::TopTreeArity,
+                >::from_data_store(
+                    tree_c_store,
+                    get_merkle_tree_leafs(tree_c_size, Tree::Arity::to_usize())?,
+                )
+                .context("tree_c")?;
+                tree_c.delete(config.clone()).context("tree_c")?;
             }
+            trace!("tree c deleted");
         }
-        trace!("tree c deleted");
 
         for i in 0..t_aux.labels.labels.len() {
             let cur_config = t_aux.labels.labels[i].clone();
@@ -475,9 +463,9 @@ pub struct TemporaryAuxCache<Tree: MerkleTreeTrait, G: Hasher> {
     // Notably this is a LevelCacheTree instead of a full merkle.
     pub tree_r_last: LCTree<Tree::Hasher, Tree::Arity, Tree::SubTreeArity, Tree::TopTreeArity>,
 
-    // Store the 'rows_to_discard' value from the tree_r_last
+    // Store the 'cached_above_base layers' value from the tree_r_last
     // StoreConfig for later use (i.e. proof generation).
-    pub tree_r_last_config_rows_to_discard: usize,
+    pub tree_r_last_config_levels: usize,
 
     pub tree_c: DiskTree<Tree::Hasher, Tree::Arity, Tree::SubTreeArity, Tree::TopTreeArity>,
     pub t_aux: TemporaryAux<Tree, G>,
@@ -515,16 +503,15 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAuxCache<Tree, G> {
             DiskTree<Tree::Hasher, Tree::Arity, Tree::SubTreeArity, Tree::TopTreeArity>,
         >(tree_c_size, &configs)?;
 
-        // tree_r_last_size stored in the config is the base tree size
-        let tree_r_last_size = t_aux.tree_r_last_config.size.unwrap();
-        let tree_r_last_config_rows_to_discard = t_aux.tree_r_last_config.rows_to_discard;
-        let (configs, replica_config) = split_config_and_replica(
+        let (configs, replica_paths) = split_config_and_replica(
             t_aux.tree_r_last_config.clone(),
             replica_path.clone(),
-            get_merkle_tree_leafs(tree_r_last_size, Tree::Arity::to_usize())?,
             tree_count,
         )?;
 
+        // tree_c_size stored in the config is the base tree size
+        let tree_r_last_size = t_aux.tree_r_last_config.size.unwrap();
+        let tree_r_last_config_levels = t_aux.tree_r_last_config.levels;
         trace!(
             "Instantiating tree r last [count {}] with size {} and arity {}, {}, {}",
             tree_count,
@@ -535,13 +522,13 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAuxCache<Tree, G> {
         );
         let tree_r_last = create_lc_tree::<
             LCTree<Tree::Hasher, Tree::Arity, Tree::SubTreeArity, Tree::TopTreeArity>,
-        >(tree_r_last_size, &configs, &replica_config)?;
+        >(tree_r_last_size, &configs, &replica_paths)?;
 
         Ok(TemporaryAuxCache {
             labels: LabelsCache::new(&t_aux.labels).context("labels_cache")?,
             tree_d,
             tree_r_last,
-            tree_r_last_config_rows_to_discard,
+            tree_r_last_config_levels,
             tree_c,
             replica_path,
             t_aux: t_aux.clone(),
@@ -565,7 +552,7 @@ impl<Tree: MerkleTreeTrait, G: Hasher> TemporaryAuxCache<Tree, G> {
     }
 }
 
-type VerifyCallback = fn(&StoreConfig, usize, usize) -> Result<()>;
+type VerifyCallback = fn(&StoreConfig, usize) -> Result<()>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Labels<Tree: MerkleTreeTrait> {
@@ -604,10 +591,9 @@ impl<Tree: MerkleTreeTrait> Labels<Tree> {
 
     pub fn verify_stores(&self, callback: VerifyCallback, cache_dir: &PathBuf) -> Result<()> {
         let updated_path_labels = self.labels.clone();
-        let required_configs = get_base_tree_count::<Tree>();
         for mut label in updated_path_labels {
             label.path = cache_dir.to_path_buf();
-            callback(&label, BINARY_ARITY, required_configs)?;
+            callback(&label, BINARY_ARITY)?;
         }
 
         Ok(())
@@ -737,7 +723,6 @@ pub fn generate_replica_id<H: Hasher, T: AsRef<[u8]>>(
     sector_id: u64,
     ticket: &[u8; 32],
     comm_d: T,
-    porep_seed: &[u8; 32],
 ) -> H::Domain {
     use sha2::{Digest, Sha256};
 
@@ -746,7 +731,6 @@ pub fn generate_replica_id<H: Hasher, T: AsRef<[u8]>>(
         .chain(&sector_id.to_be_bytes()[..])
         .chain(ticket)
         .chain(AsRef::<[u8]>::as_ref(&comm_d))
-        .chain(porep_seed)
         .result();
 
     bytes_into_fr_repr_safe(hash.as_ref()).into()
