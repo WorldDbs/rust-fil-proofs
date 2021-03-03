@@ -4,6 +4,7 @@ use anyhow::ensure;
 use byteorder::{ByteOrder, LittleEndian};
 use generic_array::typenum::Unsigned;
 use log::trace;
+use merkletree::store::StoreConfig;
 use paired::bls12_381::Fr;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -311,11 +312,15 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
                 let tree = priv_sector.tree;
                 let sector_id = pub_sector.id;
                 let tree_leafs = tree.leafs();
-
-                trace!(
-                    "Generating proof for tree leafs {} and arity {}",
+                let levels = StoreConfig::default_cached_above_base_layer(
                     tree_leafs,
                     Tree::Arity::to_usize(),
+                );
+
+                trace!(
+                    "Generating proof for tree leafs {}, and cached_layers {}",
+                    tree_leafs,
+                    levels,
                 );
 
                 let inclusion_proofs = (0..pub_params.challenge_count)
@@ -331,7 +336,7 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
                             challenge_index,
                         )?;
 
-                        tree.gen_cached_proof(challenged_leaf_start as usize, None)
+                        tree.gen_cached_proof(challenged_leaf_start as usize, levels)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
