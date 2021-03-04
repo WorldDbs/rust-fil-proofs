@@ -6,6 +6,7 @@ use anyhow::{bail, ensure, Context};
 use byteorder::{ByteOrder, LittleEndian};
 use generic_array::typenum;
 use log::trace;
+use merkletree::store::StoreConfig;
 use paired::bls12_381::Fr;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -355,10 +356,14 @@ impl<'a, Tree: 'static + MerkleTreeTrait> ProofScheme<'a> for ElectionPoSt<'a, T
         let tree = &priv_inputs.tree;
         let tree_leafs = tree.leafs();
 
+        let config_levels =
+            StoreConfig::default_cached_above_base_layer(tree_leafs, Tree::Arity::to_usize());
+
         trace!(
-            "Generating proof for tree of len {} with leafs {}",
+            "Generating proof for tree of len {} with leafs {}, and cached_above_base_layers {}",
             tree.len(),
             tree_leafs,
+            config_levels,
         );
 
         let inclusion_proofs = measure_op(Operation::PostInclusionProofs, || {
@@ -376,7 +381,7 @@ impl<'a, Tree: 'static + MerkleTreeTrait> ProofScheme<'a> for ElectionPoSt<'a, T
                     (0..pub_params.challenged_nodes)
                         .into_par_iter()
                         .map(move |i| {
-                            tree.gen_cached_proof(challenged_leaf_start as usize + i, None)
+                            tree.gen_cached_proof(challenged_leaf_start as usize + i, config_levels)
                         })
                 })
                 .collect::<Result<Vec<_>>>()
