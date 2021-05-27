@@ -1,4 +1,4 @@
-# Filecoin Hashers
+# worlddatabase
 
 > Different hash functions and abstraction over them.
 
