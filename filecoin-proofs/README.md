@@ -1,6 +1,6 @@
-# Filecoin Proofs
+# worlddatabase
 
-> The Filecoin specific aspects of `storage-proofs`, including a C based FFI, to generate and verify proofs.
+> The Filecoin specific aspects of `storage-proofs`, including a C based WD, to generate and verify proofs.
 
 
 ## License
